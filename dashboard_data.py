@@ -2,6 +2,7 @@
 from datetime import date, datetime, time, timedelta
 import store
 from activity_annotations import apply_annotations
+from posture_continuity import bridge_posture_gaps, MAX_GAP_SECONDS
 
 
 def merge_intervals(rows):
@@ -12,11 +13,17 @@ def merge_intervals(rows):
             continue
         if (merged and merged[-1]['kind'] == row['kind']
                 and merged[-1]['state'] == row['state']
-                and merged[-1].get('source') == row.get('source')
+                and (merged[-1].get('source') == row.get('source')
+                     or {merged[-1].get('source'), row.get('source')} <= {None, 'continuity'})
                 and merged[-1].get('annotation_id') == row.get('annotation_id')
                 and abs(row['start'] - merged[-1]['end']) < .001):
             merged[-1]['end'] = max(merged[-1]['end'], row['end'])
             merged[-1]['samples'] += 1
+            if row.get('inferred_seconds'):
+                merged[-1]['inferred_seconds'] = merged[-1].get('inferred_seconds', 0) + row['inferred_seconds']
+                merged[-1]['inferred_ranges'] = merged[-1].get('inferred_ranges', []) + row['inferred_ranges']
+            if merged[-1].get('inferred_seconds'):
+                merged[-1]['source'] = 'continuity'
         else:
             merged.append({**row, 'samples': 1})
     return merged
@@ -66,7 +73,8 @@ def dashboard_snapshot(day=None, now=None):
         tasks = [dict(r) for r in db.execute('SELECT * FROM tasks ORDER BY rowid DESC LIMIT 50')]
     rows = [{**r, 'start': max(start, r['start']), 'end': min(cutoff, r['end'])} for r in raw]
     raw_rows = merge_intervals(rows)
-    rows = merge_intervals(apply_annotations(rows, annotations))
+    rows = merge_intervals(bridge_posture_gaps(apply_annotations(rows, annotations)))
+    inferred_seconds = sum(r.get('inferred_seconds', 0) for r in rows)
     totals = {}
     hourly = [{'hour': h, 'sit': 0, 'stand': 0, 'away': 0, 'unknown': 0, 'privacy': 0} for h in range(24)]
     for r in rows:
@@ -80,4 +88,5 @@ def dashboard_snapshot(day=None, now=None):
             'as_of': now.timestamp(), 'cutoff': cutoff,
             'first_date': datetime.fromtimestamp(first, store.TZ).date().isoformat() if first else chosen.isoformat(),
             'totals': {k: round(v) for k,v in totals.items()}, 'hourly': hourly, 'intervals': rows,
+            'continuity': {'max_gap_seconds': MAX_GAP_SECONDS, 'inferred_seconds': inferred_seconds},
             'annotations': annotations, 'notes': group_notes(notes, raw_rows), 'raw_note_count': len(notes), 'active_reminders': reminders, 'settings': settings, 'tasks': tasks}

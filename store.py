@@ -1,5 +1,6 @@
 import sqlite3
 from activity_annotations import apply_annotations
+from posture_continuity import bridge_posture_gaps
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -85,7 +86,7 @@ def snapshot():
         )]
         annotations = [dict(r) for r in db.execute(
             'SELECT * FROM activity_annotations WHERE end>? AND start<? ORDER BY id', (midnight, now.timestamp()))]
-        rows = apply_annotations(rows, annotations)
+        rows = bridge_posture_gaps(apply_annotations(rows, annotations))
         for row in rows:
             row["start"] = max(midnight, row["start"])
             state = row["state"]
