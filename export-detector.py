@@ -1,3 +1,4 @@
+# Historical RTMDet export only; current production uses rebuild-vision.sh / build-yolo-engine.py.
 """Keep the RTMDet network and move per-class NMS to the application."""
 from pathlib import Path
 import onnx

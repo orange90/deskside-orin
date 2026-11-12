@@ -24,9 +24,14 @@ case "$1" in
     fetch Canfield/Qwen3.5-4B-Q4_K_M-GGUF 4bc3afea43e5c81d17b8df3ef09c8bfdb9ff56f2 Qwen3.5-4B-Q4_K_M.gguf qwen.gguf 2707513696
     echo '25082a7dd3776cc3c741c6347d3bd04523f05796607b3fbc32fa3a25dfa1418c  Documents/orin-desk-agent/models/qwen.gguf' | ssh orin 'sha256sum -c -'
     ;;
+  vision)
+    remote=Documents/orin-desk-agent/models/yolo26m-pose.pt
+    ssh -n orin 'mkdir -p Documents/orin-desk-agent/models'
+    curl -fLsS --retry 2 https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26m-pose.pt | ssh orin "cat > '$remote.part'"
+    echo "2fbf16367022256a226035695c5c389384c6706e8bb8ab8fcd0e7976f05443c4  $remote.part" | ssh orin 'sha256sum -c -'
+    ssh -n orin "mv '$remote.part' '$remote'"
+    ;;
   small)
-    fetch bukuroo/RTMDet-ONNX aa91dbccc283db36b2c250a1d91ba9518db553da rtmdet-tiny-coco.onnx rtmdet.onnx
-    fetch ziq/rtm 6bdd0110307167f5f003e92e34099a21bd61283c rtmpose-s.onnx rtmpose.onnx
     for f in ggml-base.bin ggml-small.bin; do fetch ggerganov/whisper.cpp 5359861c739e955e79d9a303bcbc70fb988958b1 "$f" "$f"; done
     ;;
   voice)

@@ -42,3 +42,5 @@ bash fast-batch.sh  # 构建两个 FP16 引擎，再串行完成 engine 测速�
 - 仅有整图坐/站/在位标签，没有逐关节点人工真值；不可计算可信的关键点 mAP、连续坐站时长误差或状态切换 P95。
 
 `results/<模型>-<后端>/` 保存原始坐标/置信度、逐次耗时、统计及标骨骼图片。RSS 是含 Python/PyTorch 框架的进程峰值，torch allocated 不包含全部 TensorRT/CUDA 内存，不能冒充模型整体显存占用。
+
+2026-11-12 生产 Vision 已切换为 YOLO26m-Pose。本页是此前实验记录；重跑 RTM 基线须使用提交 25dac69 的源码快照和旧引擎，不能把当前 Vision 输出标为 RTM 基线。evaluate.py 已加入防误标检查。

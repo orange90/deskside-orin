@@ -9,7 +9,7 @@
 - 坐姿、站姿、在位、离开、未知与隐私时段记录；人工标注另存，保留原始模型标签。
 - 历史日期、全天时间轴、完整小时活动构成、重复摘要合并、站立目标。
 - GPU/CPU、内存、Swap、温度、功耗、风扇、磁盘饼图与服务状态，每 15 秒更新。
-- 按需实时画面，每秒 1 帧，叠加同一帧的状态、检测框和真实 RTMPose 关键点，不补画缺失关节。
+- 按需实时画面，每秒 1 帧，叠加同一帧的状态、检测框和真实 YOLO26m-Pose 关键点，不补画缺失关节。
 - 可点击模型工作流；Whisper small/base/Turbo 本地切换，显示实际权重大小与明确标注的内存估算。
 - 中文语音输入、文字答复、待办、久坐和定时提醒；Mac 无声系统通知独立于网页工作。
 - 白天持续黑屏进入隐私保护，暂停预览和视觉处理；不持续录像。
@@ -21,8 +21,7 @@
 
 ```mermaid
 flowchart LR
-    Camera[摄像头] --> Detector[RTMDet-tiny]
-    Detector --> Pose[RTMPose-s / 相对关节与动作]
+    Camera[摄像头] --> Pose[YOLO26m-Pose / 人体框与17个关节]
     Pose --> State[稳定状态与在位判断]
     Camera -. 按需选帧 .-> Cosmos[Cosmos3-Edge Reasoner]
     Cosmos --> State
@@ -41,8 +40,7 @@ flowchart LR
 
 | 部件 | 实现 |
 |---|---|
-| 人体检测 | RTMDet-tiny / TensorRT FP16 |
-| 姿态估计 | RTMPose-s / TensorRT FP16 |
+| 人体检测与姿态估计 | YOLO26m-Pose / TensorRT FP16；同帧联合输出 |
 | 视觉复核 | Cosmos3-Edge Reasoner / Transformers CUDA；保留 vLLM 实验工具 |
 | 问答 | Qwen3.5-4B Q4_K_M / llama.cpp |
 | 语音 | whisper.cpp + Silero VAD；基线 small，可选 base/Turbo Q5 |
@@ -107,3 +105,5 @@ node dashboard-smoke.js < dashboard.html
 - [本机证据与导入范围](docs/EVIDENCE.md)
 
 个人摄像头照片、录音、活动数据库、逐条运行日志、模型权重、凭据及已取消功能的旧实现保留在本机，不入库。
+
+2026-11-12 起线上使用 YOLO26m-Pose。切换验证、引擎重建和回滚见 [YOLO26m 上线记录](docs/YOLO26m上线.md)。历史实验中的 RTMDet/RTMPose 指当时的旧版本。

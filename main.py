@@ -203,6 +203,7 @@ def capture_frames():
                 frame_count += 1
                 publish(preview_data, ready=True, person=ps, desk=ds, desk_edge=edge_y,
                         pose_source=pose_source, people=count, presence=present,
+                        vision_model=vision.model_info, vision_ms=vision.model.last_ms if not paused else None,
                         presence_source=presence_source, occluded=reviewed == "occluded",
                         overlay=vision.overlay if not paused else None,
                         image_width=frame.shape[1], image_height=frame.shape[0], captured_at=time.time(),

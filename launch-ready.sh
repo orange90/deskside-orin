@@ -5,7 +5,7 @@ export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 target="$1"
 case "$target" in
   vision)
-    until [[ -s models/rtmdet.plan && -s models/rtmpose.plan ]]; do sleep 10; done
+    until [[ -s models/yolo26m-pose.engine ]]; do sleep 10; done
     exec bash start-app.sh
     ;;
   qwen)

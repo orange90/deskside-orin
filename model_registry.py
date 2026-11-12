@@ -14,7 +14,7 @@ ASR = {
 
 # Conservative deployment budgets, not per-process measurements. Shared runtimes overlap.
 MEMORY_BUDGET = {'small': [1.0, 2.0], 'base': [0.5, 1.0], 'turbo': [1.5, 3.0],
-                 'detector': [0.2, 0.6], 'pose': [0.15, 0.5], 'qwen': [3.5, 6.0], 'cosmos': [10.0, 16.0]}
+                 'pose': [0.3, 1.0], 'qwen': [3.5, 6.0], 'cosmos': [10.0, 16.0]}
 
 
 @lru_cache(maxsize=32)
@@ -49,8 +49,7 @@ def asr_path():
 def catalog():
     selected = current()
     components = [
-        {'id': 'detector', 'title': '人体检测', 'model': 'RTMDet-tiny', 'engine': 'TensorRT FP16', 'description': '从工位画面定位人物，为姿态估计提供裁剪区域。', 'path': 'models/rtmdet.plan'},
-        {'id': 'pose', 'title': '姿态估计', 'model': 'RTMPose-s', 'engine': 'TensorRT FP16', 'description': '结合相对关节几何、起落轨迹判断坐站；不依赖固定图像高度。', 'path': 'models/rtmpose.plan'},
+        {'id': 'pose', 'title': '人体与姿态', 'model': 'YOLO26m-Pose', 'engine': 'TensorRT FP16', 'description': '同一次推理输出人体框与 17 个关键点，再结合相对关节几何、动作和连续状态判断坐站。与人体检测共用一个引擎。', 'path': 'models/yolo26m-pose.engine'},
         {'id': 'cosmos', 'title': '视觉复核', 'model': 'Cosmos3-Edge Reasoner', 'engine': '本机 CUDA', 'description': '对选中的帧或短片段复核姿态、生成画面摘要。隐私保护时暂停。', 'path': 'models/cosmos'},
         {'id': 'asr', 'title': '语音识别', 'model': ASR[selected]['name'], 'engine': 'whisper.cpp · CUDA', 'description': '按下录音后才采集 Orin 麦克风。中文转写交给本地任务路由。', 'path': ASR[selected]['path']},
         {'id': 'qwen', 'title': '问答与任务', 'model': 'Qwen3.5-4B', 'engine': 'llama.cpp · Q4_K_M', 'description': '回答开放问题并解析任务。坐站统计与明确的待办、提醒优先走确定性规则。', 'path': 'models/qwen.gguf'},

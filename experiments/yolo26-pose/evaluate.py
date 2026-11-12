@@ -33,6 +33,8 @@ if args.review:
 model_path=ROOT/'models'/f'{args.model}.{args.backend}'
 base=args.model=='rtmdet-rtmpose'
 model=Vision() if base else YOLO(model_path,task='pose')
+if base and getattr(model, 'model_info', {}).get('name', '').startswith('YOLO'):
+    raise RuntimeError('Historical RTM baseline requires source at commit 25dac69; current Vision is YOLO26m-Pose')
 
 def infer(image):
     if base:

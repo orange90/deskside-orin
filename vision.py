@@ -9,18 +9,6 @@ from state import RelativeRise, desk_state, person_state
 ROOT = Path(__file__).resolve().parent
 
 
-class Model:
-    def __init__(self, name):
-        from trt_model import TensorRT
-        shape = (1, 3, 640, 640) if name == "rtmdet" else (1, 3, 256, 192)
-        self.backend = TensorRT(ROOT / "models" / f"{name}.plan", shape)
-
-    def __call__(self, image, mean, std):
-        image = (image.astype(np.float32) - np.asarray(mean, np.float32)) / np.asarray(std, np.float32)
-        tensor = np.ascontiguousarray(image.transpose(2, 0, 1)[None])
-        return self.backend(tensor)
-
-
 def crop(frame, roi):
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = (int(value * scale) for value, scale in zip(roi, (w, h, w, h)))
@@ -147,91 +135,51 @@ def background_stable(previous, current, shape, box):
 
 class Vision:
     def __init__(self):
-        self.detector = Model("rtmdet")
-        self.pose = Model("rtmpose")
+        from yolo_pose import YoloPose
+        self.model = YoloPose(ROOT)
+        self.model_info = self.model.info
         self.boxes = None
         self.scene = None
-        self.detect_at = 0
         self.background = None
         self.rise = RelativeRise()
         self.overlay = None
-
-    def people(self, frame):
-        h, w = frame.shape[:2]
-        ratio = min(640 / h, 640 / w)
-        resized = cv2.resize(frame, (round(w * ratio), round(h * ratio)))
-        canvas = np.full((640, 640, 3), 114, dtype=np.uint8)
-        canvas[:resized.shape[0], :resized.shape[1]] = resized
-        raw_boxes, scores = self.detector(canvas, (103.53, 116.28, 123.675),
-                                          (57.375, 57.12, 58.395))
-        scores = scores[0, :, 0]
-        candidates = scores >= .28
-        boxes = raw_boxes[0, candidates].astype(np.float32)
-        scores = scores[candidates].astype(np.float32)
-        if not boxes.size:
-            return np.empty((0, 5), np.float32)
-        xywh = boxes.copy()
-        xywh[:, 2:] -= xywh[:, :2]
-        keep = np.asarray(cv2.dnn.NMSBoxes(xywh.tolist(), scores.tolist(), .27, .45),
-                          dtype=np.int64).reshape(-1)
-        return np.column_stack((boxes[keep] / ratio, scores[keep]))
-
-    def body_cues(self, image, box):
-        x1, y1, x2, y2 = box
-        center = np.array([(x1 + x2) / 2, (y1 + y2) / 2])
-        width = max(x2 - x1, (y2 - y1) * .75) * 1.25
-        if width <= 0:
-            return "unknown", None, None
-        scale = np.array([width, width / .75])
-        origin = center - scale / 2
-        affine = np.array([[192 / scale[0], 0, -origin[0] * 192 / scale[0]],
-                           [0, 256 / scale[1], -origin[1] * 256 / scale[1]]])
-        pixels = cv2.warpAffine(image, affine, (192, 256))
-        rgb = cv2.cvtColor(pixels, cv2.COLOR_BGR2RGB)
-        x, y = self.pose(rgb, (123.675, 116.28, 103.53), (58.395, 57.12, 57.375))
-        scores = np.minimum(x[0].max(axis=-1), y[0].max(axis=-1))
-        x_index, y_index = x[0].argmax(axis=-1), y[0].argmax(axis=-1)
-        orientation = face_orientation(x_index, scores)
-        legs = leg_posture(np.column_stack((x_index, y_index)) / 2, scores)
-        coordinates = origin + (np.column_stack((x_index, y_index))/2) * scale / np.array([192, 256])
-        joints = [{'x': float(xy[0]), 'y': float(xy[1]), 'confidence': float(score)}
-                  for xy, score in zip(coordinates, scores)]
-        return orientation, legs, joints
 
     def sample(self, frame, config):
         edge_y = desk_edge(frame, config)
         desk = desk_state(edge_y, config)
         person_roi = config.get("person_roi", [0, 0, 1, 1])
         region, offset_x, offset_y = crop(frame, person_roi)
+        if self.boxes is None or self.scene != person_roi:
+            self.background = None
+            self.rise.clear()
+        self.scene = person_roi
+        # Boxes and joints are always inferred together from this exact frame.
+        self.boxes, all_joints = self.model(region)
         now = time.monotonic()
-        scene = person_roi
-        fresh = self.boxes is None or self.scene != scene or now >= self.detect_at
-        if fresh:
-            if self.scene != scene or self.boxes is None:
-                self.background = None
-                self.rise.clear()
-            self.scene = scene
-            self.boxes = self.people(region)
-            self.detect_at = now + .45
-        self.overlay = {'keypoints': [], 'detections': [
+        self.overlay = {'model': self.model_info['name'], 'keypoints': [], 'detections': [
             {'box': [float(v) for v in box[:4] + np.array([offset_x, offset_y, offset_x, offset_y])],
              'confidence': float(box[4])} for box in self.boxes]}
         count = len(self.boxes)
         strong = int(np.count_nonzero(self.boxes[:, 4] >= .45))
         orientation, legs, region_hint, motion = "unknown", None, None, None
         if count == 1 or strong == 1:
-            box = self.boxes[int(np.argmax(self.boxes[:, 4])), :4]
-            orientation, legs, joints = self.body_cues(region, box)
-            if joints:
-                self.overlay['keypoints'] = [{**p, 'x': p['x'] + offset_x, 'y': p['y'] + offset_y} for p in joints]
+            selected = int(np.argmax(self.boxes[:, 4]))
+            box, points = self.boxes[selected, :4], all_joints[selected]
+            width = max(box[2]-box[0], (box[3]-box[1])*.75)*1.25
+            # Keep the same normalized geometry thresholds used in the photo comparison.
+            normalized = points[:, :2] * (192/max(float(width), 1))
+            orientation = face_orientation(normalized[:, 0]*2, points[:, 2])
+            legs = leg_posture(normalized, points[:, 2])
+            self.overlay['keypoints'] = [
+                {'x': float(p[0]+offset_x), 'y': float(p[1]+offset_y), 'confidence': float(p[2])}
+                for p in points]
             region_hint = person_crop_hint(box, frame.shape, offset_x, offset_y)
-            if fresh:
-                gray = cv2.cvtColor(cv2.resize(frame, (160, 90)), cv2.COLOR_BGR2GRAY)
-                full_box = box + (offset_x, offset_y, offset_x, offset_y)
-                x1, y1, x2, y2 = full_box
-                steady = background_stable(self.background, gray, frame.shape, full_box)
-                self.rise.update(((x1+x2)/2, y1, x2-x1), now, steady)
-                self.background = gray
+            gray = cv2.cvtColor(cv2.resize(frame, (160, 90)), cv2.COLOR_BGR2GRAY)
+            full_box = box + (offset_x, offset_y, offset_x, offset_y)
+            x1, y1, x2, y2 = full_box
+            steady = background_stable(self.background, gray, frame.shape, full_box)
+            self.rise.update(((x1+x2)/2, y1, x2-x1), now, steady)
+            self.background = gray
             motion = self.rise.pose
         else:
             self.rise.clear()
