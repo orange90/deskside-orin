@@ -43,7 +43,7 @@ def publish(frame, **values):
                 not values.get("ready") or values.get("vision_paused")):
             vision_epoch += 1
             try:
-                _, pending, _ = events.get_nowait()
+                _, pending, _, _ = events.get_nowait()
             except queue.Empty:
                 pass
             else:
@@ -60,6 +60,7 @@ class PostureReview:
         self.label = None
         self.valid_until = 0.0
         self.absence = AbsenceEvidence()
+        self.empty_candidate = None
 
     def clear(self):
         if self.pending is not None:
@@ -67,8 +68,12 @@ class PostureReview:
         self.pending = self.label = None
         self.requested = self.valid_until = 0.0
         self.absence = AbsenceEvidence()
+        self.empty_candidate = None
 
     def update(self, frame, now, *, empty_candidate, interval):
+        if self.empty_candidate is not None and self.empty_candidate != empty_candidate:
+            self.clear()
+        self.empty_candidate = empty_candidate
         if self.pending is not None and self.pending.done():
             label = None if self.pending.cancelled() else self.pending.result()
             confirmed_empty = self.absence.update(label, self.requested, empty_candidate)
@@ -76,7 +81,7 @@ class PostureReview:
             if label in {"sitting", "standing", "present", "occluded"} or confirmed_empty:
                 self.label = {"sitting": "sit", "standing": "stand", "present": "present",
                               "occluded": "occluded", "away": "away"}[label]
-                self.valid_until = self.requested + max(4, interval + 2)
+                self.valid_until = self.requested + (max(4, interval + 2) if empty_candidate else 7)
             LOG.info("Presence review label=%s empty_candidate=%s confirmed_empty=%s", label, empty_candidate, confirmed_empty)
             self.pending = None
         if not empty_candidate:
@@ -86,7 +91,7 @@ class PostureReview:
         if self.pending is None and now - self.requested >= interval:
             reply = Future()
             try:
-                events.put_nowait(([frame()], reply, vision_epoch))
+                events.put_nowait(([frame()], reply, vision_epoch, "occupancy" if empty_candidate else "person"))
             except queue.Full:
                 pass
             else:
@@ -94,13 +99,17 @@ class PostureReview:
         return self.label if now < self.valid_until else None
 
 
-def desk_image(frame, roi):
+def desk_image(frame, roi, *, posture_detail=False):
     import cv2
     from vision import crop
 
+    if posture_detail and max(frame.shape[:2]) <= 640:
+        # Preserve local pixels and chair context on low-resolution feeds.
+        # Use the configured review area for the usual high-resolution feed.
+        roi = (0, 0, 1, 1)
     region, _, _ = crop(frame, roi)
     height, width = region.shape[:2]
-    scale = min(1, 640 / max(height, width))
+    scale = min(1, (960 if posture_detail else 640) / max(height, width))
     _, image = cv2.imencode(".jpg", cv2.resize(region, (int(width*scale), int(height*scale))))
     return image.tobytes()
 
@@ -182,7 +191,7 @@ def capture_frames():
                         roi = config.get("cosmos_roi") or person_roi or (0, 0, 1, 1)
                         empty_candidate = count == 0
                         interval = (6 if previous == "away" else 3) if empty_candidate else 1.5
-                        reviewed = review.update(lambda: desk_image(frame, roi), now,
+                        reviewed = review.update(lambda: desk_image(frame, roi, posture_detail=not empty_candidate), now,
                                                  empty_candidate=empty_candidate, interval=interval)
                         if reviewed in {"sit", "stand", "present"}:
                             p = "unknown" if reviewed == "present" else reviewed
@@ -220,7 +229,7 @@ def capture_frames():
                     history.append((now, desk_image(frame, roi)))
                 if ps != previous and previous in {"sit", "stand", "away"} and ps in {"sit", "stand", "away"} and history:
                     try:
-                        events.put_nowait(([data for _, data in history], None, vision_epoch))
+                        events.put_nowait(([data for _, data in history], None, vision_epoch, None))
                     except queue.Full:
                         pass
                 previous, last_sample = ps, now
@@ -254,7 +263,7 @@ def capture_frames():
 def cosmos():
     while not stop.is_set():
         try:
-            frames, reply, epoch = events.get(timeout=.5)
+            frames, reply, epoch, review_mode = events.get(timeout=.5)
         except queue.Empty:
             continue
         while epoch == vision_epoch and (voice.busy.is_set() or voice.recording):
@@ -272,7 +281,7 @@ def cosmos():
                    "data:image/jpeg;base64," + base64.b64encode(frame).decode()}}
                   for frame in frames[-count:]]
         try:
-            label, summary = describe_desk_frames(images, posture_review=reply is not None)
+            label, summary = describe_desk_frames(images, posture_review=reply is not None, review_mode=review_mode)
             with lock:
                 if reply is not None:
                     reply.set_result(label if epoch == vision_epoch else None)

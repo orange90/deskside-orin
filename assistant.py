@@ -1,5 +1,4 @@
 from pathlib import Path
-import audioop
 import json
 import re
 import wave
@@ -27,7 +26,7 @@ def chat(port, payload, timeout):
         return json.load(response)["choices"][0]["message"]["content"]
 
 
-def describe_desk_frames(images, timeout=30, posture_review=False):
+def describe_desk_frames(images, timeout=30, posture_review=False, review_mode=None):
     labels = {
         "standing": "画面显示有人站在桌前。",
         "sitting": "画面显示有人坐在桌前。",
@@ -44,9 +43,9 @@ def describe_desk_frames(images, timeout=30, posture_review=False):
                       leaving="画面显示有人正在离开桌前。")
         prompt = ("The frames are in chronological order. Answer only one visible label: "
                   "standing_up, sitting_down, leaving, standing, sitting, away, unknown.")
-    def classify(frames, question):
+    def classify(frames, question, tokens=12):
         raw = chat(8082, {
-            "model": "cosmos", "max_tokens": 12, "temperature": 0,
+            "model": "cosmos", "max_tokens": tokens, "temperature": 0,
             "chat_template_kwargs": {"enable_thinking": False},
             "messages": [{"role": "user", "content": [
                 *frames, {"type": "text", "text": question}
@@ -54,7 +53,16 @@ def describe_desk_frames(images, timeout=30, posture_review=False):
         }, timeout)
         return raw.strip().lower().strip("`.*\"' ")
 
-    label = classify(images, prompt)
+    if review_mode == "person":
+        description = classify(images, "Describe the visible human body posture in ONE short sentence, including its spatial relation to furniture. Distinguish standing behind a chair from sitting on it. Do not infer sitting just because a chair overlaps the person. If the person or posture is not visible, say it is unclear.", tokens=32)
+        # Accept an explicit assertion about the person. Uncertain descriptions
+        # still confirm presence from the detector, without adding posture time.
+        match = re.match(r"^(?:the |a )?(?:person|individual|man|woman) is (standing|sitting|seated)\b", description)
+        if match and not re.search(r"\b(?:unclear|possibly|maybe|or|might|may|appears|seems)\b", description):
+            label = "sitting" if match[1] == "seated" else match[1]
+            return label, labels[label]
+        return "present", labels["unknown"]
+    label = "unknown" if review_mode == "occupancy" else classify(images, prompt)
     if label not in labels or label in {"away", "unknown"}:
         occupancy = classify(images[-1:],
             "Assess whether the desk is occupied. A large chair back can completely hide a seated person. "
@@ -301,6 +309,7 @@ class Voice:
                 self.busy.clear()
 
     def transcribe(self, path, model, prompt=ASR_HINT):
+        import audioop
         with wave.open(str(path), "rb") as audio:
             if audioop.rms(audio.readframes(audio.getnframes()), audio.getsampwidth()) < 25:
                 return ""
