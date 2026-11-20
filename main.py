@@ -22,7 +22,7 @@ import model_registry
 from dashboard_data import dashboard_snapshot
 from telemetry import monitor
 from assistant import Voice, describe_desk_frames, respond
-from state import AbsenceEvidence, FrameLight, PresenceContinuity, SittingSession, StableState
+from state import OccupiedPosture, AbsenceEvidence, FrameLight, PresenceContinuity, SittingSession, StableState
 
 LOG = logging.getLogger("uvicorn.error")
 ROOT = store.ROOT
@@ -133,6 +133,7 @@ def capture_frames():
     session = SittingSession()
     presence = StableState()
     continuity = PresenceContinuity()
+    estimate = OccupiedPosture()
     history = deque(maxlen=3)
     cap = None
     last_sample = None
@@ -168,6 +169,7 @@ def capture_frames():
                     vision.boxes = None
                     review.clear()
                     continuity = PresenceContinuity()
+                    estimate = OccupiedPosture()
                     person_roi = current_roi
                 if paused:
                     if not was_paused:
@@ -177,6 +179,7 @@ def capture_frames():
                         history.clear()
                         last_subject_roi = None
                         continuity = PresenceContinuity()
+                        estimate = OccupiedPosture()
                     ds = ps = present = orientation = "unknown"
                     edge_y = count = region_hint = pose_source = None
                     preview_data = None
@@ -204,8 +207,8 @@ def capture_frames():
                         review.clear()
                     at_desk, presence_source = continuity.update(at_desk, now)
                     ds, ps = desk.update(d, now, .6), posture.update(p, now, 1.2)
-                    if ps != p:
-                        pose_source = None
+                    ps, pose_source = estimate.choose(p, ps, pose_source, at_desk == "present",
+                                                      now, vision.overlay or {})
                     present = presence.update(at_desk, now, 1.2)
                     _, data = cv2.imencode(".jpg", frame)
                     preview_data = data.tobytes()
@@ -220,7 +223,7 @@ def capture_frames():
                         orientation=facing.update(orientation, now, .7),
                         frame_count=frame_count, frame_clock=now,
                         fps=round(1 / max(now - last_sample, .001), 1) if last_sample else 0)
-                if session.update(ps, min(now - last_sample, .3) if last_sample else 0, sit_limit):
+                if session.update("unknown" if (pose_source or "").startswith("estimate_") else ps, min(now - last_sample, .3) if last_sample else 0, sit_limit):
                     store.note("reminder", "已经坐了一段时间，可以起身活动一下。")
                 if region_hint:
                     last_subject_roi = region_hint
@@ -245,11 +248,14 @@ def capture_frames():
                 ds = ps = present = previous = "unknown"
                 last_sample = None
                 continuity = PresenceContinuity()
+                estimate = OccupiedPosture()
             if now - last_db >= 1 or privacy != was_private or not ok:
                 wall = time.time()
                 continuous = bool(last_db and now - last_db < 3 and (ok or was_paused))
                 store.persist("desk", ds, wall, continuous)
-                store.persist("person", "privacy" if privacy else ps, wall, continuous)
+                estimated = ok and not paused and (pose_source or "").startswith("estimate_")
+                recorded = "estimated_" + ps if estimated else ps
+                store.persist("person", "privacy" if privacy else recorded, wall, continuous)
                 store.persist("presence", present, wall, continuous)
                 last_db = now
             if not ok:

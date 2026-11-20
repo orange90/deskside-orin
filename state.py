@@ -138,3 +138,44 @@ class PresenceContinuity:
         if self.last_positive is not None and now - self.last_positive <= 15:
             return "present", "short_occlusion"
         return "unknown", "unconfirmed"
+
+
+@dataclass
+class OccupiedPosture:
+    """Choose a posture for an occupied workstation while preserving its provenance."""
+    confirmed: str = None
+    confirmed_at: float = 0.0
+
+    def choose(self, raw, stable, source, occupied, now, overlay):
+        if not occupied:
+            self.confirmed = None
+            return (stable, source) if raw == stable else ("unknown", None)
+        if raw in {"sit", "stand"} and raw == stable:
+            self.confirmed, self.confirmed_at = raw, now
+            return raw, source
+        if self.confirmed and now - self.confirmed_at <= 15:
+            return self.confirmed, "estimate_recent"
+        if raw in {"sit", "stand"}:
+            return raw, "estimate_pending"
+
+        # Compare the visible shoulder-to-hip and hip-to-knee vectors. This
+        # weaker cue can still be useful when ankle evidence is unavailable.
+        joints = overlay.get("keypoints", [])
+        votes = []
+        if len(joints) == 17:
+            for shoulder, hip, knee in ((5, 11, 13), (6, 12, 14)):
+                a, b, c = [joints[i] for i in (shoulder, hip, knee)]
+                if min(a["confidence"], b["confidence"], c["confidence"]) < .30:
+                    continue
+                tx, ty = b["x"]-a["x"], b["y"]-a["y"]
+                lx, ly = c["x"]-b["x"], c["y"]-b["y"]
+                torso, thigh = (tx*tx+ty*ty)**.5, (lx*lx+ly*ly)**.5
+                if min(torso, thigh) > 1:
+                    votes.append(ly > .7*thigh and thigh > .45*torso and
+                                 tx*lx+ty*ly > .8*torso*thigh)
+        if votes and all(v == votes[0] for v in votes):
+            return ("stand" if votes[0] else "sit"), "estimate_joints"
+        if self.confirmed:
+            return self.confirmed, "estimate_session"
+        # A disclosed cold-start prior when only presence can be established.
+        return "sit", "estimate_default"

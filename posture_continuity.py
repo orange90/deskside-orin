@@ -6,6 +6,9 @@ MAX_GAP_SECONDS = 3.0
 def bridge_posture_gaps(rows):
     """Require equal observed endpoints and uninterrupted presence; never extrapolate."""
     result = [dict(row) for row in rows]
+    for row in result:
+        if row['kind'] == 'person' and row['state'] in {'estimated_sit', 'estimated_stand'}:
+            row.update(state=row['state'][10:], source='estimated')
     person = sorted((r for r in result if r['kind'] == 'person'), key=lambda r: r['start'])
     presence = sorted((r for r in result if r['kind'] == 'presence'), key=lambda r: r['start'])
     for i in range(1, len(person) - 1):
