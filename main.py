@@ -4,6 +4,7 @@ import logging
 import os
 import queue
 import signal
+import sqlite3
 import threading
 import time
 import uuid
@@ -18,6 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, StrictBool
 
 import store
+import focus_sessions
 import model_registry
 from dashboard_data import activity_week, dashboard_snapshot, weekly_markdown
 from telemetry import monitor
@@ -375,9 +377,14 @@ sit_limit = 50 * 60
 def reminder_loop():
     global sit_limit
     while not stop.wait(.5):
-        with store.database() as db:
-            sit_limit = db.execute("SELECT value FROM settings WHERE key='sit_minutes'").fetchone()[0] * 60
-        store.record_due_reminders()
+        try:
+            with store.database() as db:
+                sit_limit = db.execute("SELECT value FROM settings WHERE key='sit_minutes'").fetchone()[0] * 60
+            store.record_due_reminders()
+        except sqlite3.Error:
+            LOG.exception("Reminder check failed; retrying after the database is available")
+            if stop.wait(5):
+                return
 
 
 def capture_watchdog():
@@ -477,6 +484,13 @@ class TodoCompletion(BaseModel):
     completed: StrictBool
 
 
+class FocusStart(BaseModel):
+    id: uuid.UUID
+    minutes: int = Field(strict=True, ge=1, le=180)
+    title: str | None = None
+    task_id: str | None = None
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return (ROOT / "dashboard.html").read_text()
@@ -501,6 +515,31 @@ def state():
 class ModelSelection(BaseModel):
     component: str
     model: str
+
+
+@app.get("/api/focus")
+def focus_status():
+    return focus_sessions.snapshot()
+
+
+@app.post("/api/focus")
+def start_focus(item: FocusStart):
+    try:
+        return focus_sessions.start(item.id, item.minutes, item.title, item.task_id)
+    except KeyError:
+        raise HTTPException(404, "找不到该待办") from None
+    except focus_sessions.FocusConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/focus/{session_id}/finish")
+def finish_focus(session_id: uuid.UUID):
+    try:
+        return focus_sessions.finish(session_id)
+    except KeyError:
+        raise HTTPException(404, "找不到该次专注计时") from None
 
 
 @app.get("/api/todos")

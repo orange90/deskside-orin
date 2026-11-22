@@ -13,8 +13,9 @@ const inboxTabs = ['open', 'done', 'reminders'].map(view => {
 });
 const todo = {id:'legacy / 1', body:'核对周报', completed:false};
 replies['/api/todos'] = {items:[todo], next_cursor:null};
+replies['/api/focus'] = {active:null, recent:[], server_now:start};
 replies['/api/todos/completion'] = {...todo, completed:true};
-const context=vm.createContext({AbortSignal,document:{getElementById:el,createElement:()=>new Node(),createElementNS:()=>new Node(),createTextNode:text=>({textContent:text}),querySelectorAll:selector=>selector==='[data-inbox]'?inboxTabs:[],querySelector:el,addEventListener(){},hidden:false},localStorage:{getItem:key=>storage.get(key),setItem:(k,v)=>storage.set(k,v)},setInterval(){},setTimeout(){},clearTimeout(){},crypto:{randomUUID:()=> 'fixture'},fetch:async(path,options)=>{requests.push({path,body:options.body?JSON.parse(options.body):null});return{ok:true,json:async()=>replies[path.split('?')[0]]}},console});
+const context=vm.createContext({AbortSignal,performance,document:{getElementById:el,createElement:()=>new Node(),createElementNS:()=>new Node(),createTextNode:text=>({textContent:text}),querySelectorAll:selector=>selector==='[data-inbox]'?inboxTabs:[],querySelector:el,addEventListener(){},hidden:false},localStorage:{getItem:key=>storage.get(key),setItem:(k,v)=>storage.set(k,v)},setInterval(){},setTimeout(){},clearTimeout(){},crypto:{randomUUID:()=> 'fixture'},fetch:async(path,options)=>{requests.push({path,body:options.body?JSON.parse(options.body):null});return{ok:true,json:async()=>replies[path.split('?')[0]]}},console});
 const html=fs.readFileSync(0,'utf8');vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
 (async()=>{await new Promise(setImmediate);await el('voice').onclick();await el('voice').onclick();await new Promise(setImmediate);
 assert.deepEqual(requests.filter(x=>x.path.startsWith('/api/voice/')), [{path:'/api/voice/start',body:{}},{path:'/api/voice/stop',body:{id:'fixture',save:false}}]);assert.match(el('feedback').textContent,/识别到：今天坐了多久\n本机回复：今天坐了 2 分钟/);assert.match(el('reminder-notes').children[0].textContent,/本地文字提醒/);
@@ -50,6 +51,13 @@ assert.equal(el('connection').textContent,'连接中断');assert.equal(el('live-
 context.fetch=workingFetch;fixture.date=fixture.today;
 el('today').onclick(); await new Promise(setImmediate);
 assert.equal(el('day').value,'2026-11-12');assert.match(el('connection').textContent,/已连接/);
+assert.equal(el('focus-form').hidden,false);
+replies['/api/focus'] = {active:{id:'active', title:'写初稿', minutes:25, due_at:start+1500},
+                         recent:[], server_now:start};
+await vm.runInContext('syncFocus()',context);
+assert.equal(el('focus-name').textContent,'写初稿');
+assert.equal(el('focus-clock').textContent,'25:00');
+assert.equal(el('focus-form').hidden,true);
 const taskBox = () => el('tasks').children[0].children[0].children[0];
 assert.equal(taskBox().dataset.taskId, todo.id);
 assert.equal(taskBox().checked, false);
@@ -63,4 +71,4 @@ inboxTabs[1].onclick();
 await new Promise(setImmediate);
 assert.equal(taskBox().checked, true);
 assert.ok(requests.some(r=>r.path==='/api/todos?completed=true'));
-console.log('Dashboard todo, voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});
+console.log('Dashboard focus, todo, voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});

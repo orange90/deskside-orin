@@ -72,6 +72,21 @@
 .draft-options{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #voice-draft-count{font-size:12px;font-variant-numeric:tabular-nums}
 #voice-draft-status{color:var(--ink)}#voice-draft-status:empty{display:none}
+.focus-card{margin-top:16px}
+.focus-card .section-head{margin-bottom:12px}
+.focus-form,.focus-running{display:flex;align-items:end;gap:10px;flex-wrap:wrap}
+.focus-form label{font-size:12px;color:var(--muted)}
+.focus-form label:first-child{flex:1;min-width:min(220px,100%)}
+.focus-form input{display:block;margin-top:4px;width:100%;color:var(--ink)}
+#focus-minutes{width:84px}
+.focus-running{align-items:center}.focus-running strong{margin-right:auto;overflow-wrap:anywhere}
+#focus-clock{font:550 26px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;font-variant-numeric:tabular-nums}
+#focus-last,#focus-message,#focus-sync{margin-top:9px;font-size:12px;overflow-wrap:anywhere}
+#focus-message:empty,#focus-last:empty{display:none}
+#focus-sync button,#focus-detach{font-size:12px;padding:5px 9px}
+.inbox-task{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.inbox-task label{flex:1;min-width:0}
+.focus-task{flex:none;line-height:1;font-size:18px;padding:5px 8px;border:0;color:var(--green)}
 </style>
 </head>
 <body>
@@ -111,6 +126,20 @@
     </div>
   </div>
 </details>
+<section class="card focus-card" id="focus" aria-labelledby="focus-heading">
+  <div class="section-head"><h2 id="focus-heading" tabindex="-1">专注计时</h2></div>
+  <form class="focus-form" id="focus-form" hidden>
+    <label><span id="focus-title-label">专注主题</span><input id="focus-title" maxlength="120" placeholder="这段时间想做什么？（选填）"></label>
+    <button id="focus-detach" type="button" hidden>改用自定主题</button>
+    <label>时长（分钟）<input id="focus-minutes" type="number" min="1" max="180" step="1" value="25" required></label>
+    <button class="primary" id="focus-start">开始专注</button>
+  </form>
+  <div class="focus-running" id="focus-running" hidden><strong id="focus-name"></strong>
+    <span class="muted" id="focus-clock-label">剩余</span><span id="focus-clock" role="timer" aria-label="剩余时间"></span><button id="focus-finish" type="button">提前结束</button>
+  </div>
+  <p id="focus-last" class="muted"></p><p id="focus-message" role="status"></p>
+  <p id="focus-sync" class="muted"><span id="focus-sync-text">正在连接 Orin…</span> <button type="button" id="focus-retry" hidden>重新同步</button></p>
+</section>
 <section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><button id="live-toggle">开启实时画面</button></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div></div></section>
 <section id="hardware" class="section-block"><div class="section-title"><div><h2>设备的实时脉搏</h2><p>独立实时数据 · 最近 15 分钟趋势 · 每 15 秒采样</p></div><span class="muted" id="hardware-updated">等待采样</span></div><div class="hardware-grid">
 <article class="card hardware-metric"><div class="metric-label">GPU 使用率 <span>GPU</span></div><div class="value" id="gpu-value">—</div><svg id="gpu-spark" class="spark" viewBox="0 0 240 42" aria-label="GPU 使用率趋势"></svg><p class="hardware-sub" id="gpu-sub">等待遥测</p></article>
@@ -350,6 +379,105 @@ el('week-retry').onclick=()=>{
   if(data && data.date===el('day').value) void loadWeek(true);
   else {resetWeek();void refresh()}
 };
+let focusSnapshot=null, focusSyncedAt=0, focusOnline=false, focusLoading=false, focusBusy=false;
+let focusRead=0, focusDueCheck=null, focusTaskId=null, focusAttempt=null;
+function focusDraft(){
+  const source=focusTaskId?{task_id:focusTaskId}:{title:el('focus-title').value.trim() || '专注'};
+  return {...source,minutes:el('focus-minutes').valueAsNumber};
+}
+function selectFocusSource(item){
+  focusTaskId=item?.id || null;
+  el('focus-title').value=item?.body || '';
+  el('focus-title').readOnly=!!item;
+  text('focus-title-label',item?'关联待办':'专注主题');
+  el('focus-detach').hidden=!item;
+}
+function chooseFocusTask(item){
+  el('focus').scrollIntoView({block:'center'});
+  if(focusSnapshot?.active || focusBusy){
+    el('focus-heading').focus({preventScroll:true});
+    text('focus-message','当前计时结束后，可为这项待办开启专注。');
+    return;
+  }
+  selectFocusSource(item);
+  text('focus-message','');
+  el(focusOnline?'focus-minutes':'focus-heading').focus({preventScroll:true});
+}
+function tickFocus(){
+  const active=focusSnapshot?.active;
+  if(!active || document.hidden) return;
+  const now=focusSnapshot.server_now+(performance.now()-focusSyncedAt)/1000;
+  const left=Math.min(active.minutes*60,Math.max(0,Math.ceil(active.due_at-now)));
+  text('focus-clock',Math.floor(left/60)+':'+String(left%60).padStart(2,'0'));
+  text('focus-clock-label',left?'剩余':'到时待核对');
+  el('focus-finish').disabled=focusBusy || !focusOnline || !left;
+  if(!left && focusDueCheck!==active.id && focusOnline && !focusBusy){
+    focusDueCheck=active.id;
+    void syncFocus();
+  }
+}
+function renderFocus(){
+  const active=focusSnapshot?.active;
+  el('focus-form').hidden=!focusSnapshot || !!active;
+  el('focus-running').hidden=!active;
+  for(const id of ['focus-title','focus-minutes','focus-detach','focus-start'])
+    el(id).disabled=focusBusy || !focusOnline;
+  if(active){text('focus-name',active.title);tickFocus()}
+  const last=focusSnapshot?.recent.find(row=>row.state!=='active');
+  const time=last && new Date(last.ended_at*1000).toLocaleString('zh-CN',{
+    timeZone:'Asia/Shanghai',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
+  text('focus-last',last?'上次 · '+last.title+' · '+time+(last.state==='finished'?' 已到时':' 提前结束'):'');
+  el('focus-sync').hidden=focusOnline;
+  el('focus-retry').hidden=focusOnline;
+  if(!focusOnline) text('focus-sync-text',active?'连接中断，剩余时间按上次同步估算。':'暂时无法读取 Orin 计时状态。');
+}
+async function syncFocus(afterWrite=false){
+  if(focusLoading || (focusBusy && !afterWrite)) return;
+  const generation=++focusRead;
+  focusLoading=true;
+  try{
+    const next=await request('/api/focus');
+    if(generation!==focusRead) return;
+    if(!Number.isFinite(next.server_now)) throw Error('计时状态不可用');
+    if(focusSnapshot?.active && !next.active) text('focus-message','');
+    focusSnapshot=next; focusSyncedAt=performance.now(); focusOnline=true;
+    if(focusAttempt && [next.active,...next.recent].some(s=>s?.id===focusAttempt.id)){
+      if(focusAttempt.key===JSON.stringify(focusDraft())) selectFocusSource(null);
+      focusAttempt=null; text('focus-message','');
+    }
+  }catch(error){if(generation===focusRead) focusOnline=false}
+  finally{if(generation===focusRead){focusLoading=false;renderFocus()}}
+}
+async function changeFocus(finishId){
+  if(focusBusy || !focusOnline) return;
+  const returnFocus=el('focus').contains(document.activeElement);
+  const draft=focusDraft(), key=JSON.stringify(draft);
+  if(!finishId && focusAttempt?.key!==key) focusAttempt={id:crypto.randomUUID(),key};
+  focusBusy=true; focusRead++; focusLoading=false; renderFocus();
+  text('focus-message',finishId?'正在结束计时…':'正在启动计时…');
+  try{
+    const session=finishId?await request('/api/focus/'+encodeURIComponent(finishId)+'/finish',{},10000):
+      await request('/api/focus',{id:focusAttempt.id,...draft},10000);
+    if(session.state==='active') focusSnapshot.active=session;
+    else{
+      if(focusSnapshot.active?.id===session.id) focusSnapshot.active=null;
+      focusSnapshot.recent=[session,...focusSnapshot.recent.filter(s=>s.id!==session.id)].slice(0,5);
+    }
+    text('focus-message','');
+  }catch(error){
+    text('focus-message',error.status?error.message:'未收到操作结果，正在核对计时状态。');
+  }finally{
+    await syncFocus(true);
+    focusBusy=false; renderFocus();
+    if(returnFocus && document.activeElement===document.body)
+      el(!focusOnline?'focus-retry':focusSnapshot?.active?'focus-finish':'focus-title').focus({preventScroll:true});
+  }
+}
+el('focus-form').onsubmit=e=>{e.preventDefault();if(!focusSnapshot?.active) void changeFocus()};
+el('focus-finish').onclick=()=>{if(focusSnapshot?.active) void changeFocus(focusSnapshot.active.id)};
+el('focus-detach').onclick=()=>{selectFocusSource(null);el('focus-title').focus()};
+el('focus-retry').onclick=()=>syncFocus();
+setInterval(tickFocus,1000);
 let inboxView='open', inboxTrail=[null], inboxNext=null, inboxSignature='', inboxItems=[];
 let inboxRead=0, inboxReading='', revealTaskId=null;
 const savingTodos=new Set(), inboxTabs=document.querySelectorAll('[data-inbox]');
@@ -381,7 +509,8 @@ function renderInbox(items){
   if(inboxSignature===signature) return;
   inboxItems=items;
   const focused=document.activeElement?.dataset.taskId;
-  const oldIndex=focused===undefined?-1:Array.from(list.querySelectorAll('input')).indexOf(document.activeElement);
+  const control=document.activeElement?.tagName==='BUTTON'?'button':'input';
+  const oldIndex=focused===undefined?-1:Array.from(list.querySelectorAll(control)).indexOf(document.activeElement);
   const nodes=items.map(item=>{
     if(inboxView==='reminders'){
       const row=make('li','task-item',item.body);
@@ -394,6 +523,13 @@ function renderInbox(items){
     box.setAttribute('aria-label',(item.completed?'恢复待办 · ':'完成待办 · ')+item.body);
     box.onchange=()=>setTodoCompletion(item,box);
     label.append(box,make('span','',item.body)); row.append(label);
+    if(!item.completed){
+      const timer=make('button','focus-task','◷');
+      timer.type='button'; timer.dataset.taskId=item.id; timer.title='为这项待办设置计时';
+      timer.setAttribute('aria-label','为「'+item.body+'」设置专注计时');
+      timer.onclick=()=>chooseFocusTask(item);
+      row.append(timer);
+    }
     return row;
   });
   const emptyText={open:'这一页没有待处理的待办。',done:'这一页没有已完成的待办。',reminders:'最近 50 条任务中没有提醒。'};
@@ -401,7 +537,7 @@ function renderInbox(items){
   if(inboxView==='reminders' && nodes.length) list.append(make('li','hardware-sub','显示最近 50 条任务中的提醒 · 北京时间'));
   inboxSignature=signature;
   if(oldIndex>=0){
-    const boxes=Array.from(list.querySelectorAll('input'));
+    const boxes=Array.from(list.querySelectorAll(control));
     const next=boxes.find(b=>b.dataset.taskId===focused) || boxes[Math.min(oldIndex,boxes.length-1)] ||
       document.querySelector('[data-inbox="'+inboxView+'"]');
     next.focus({preventScroll:true});
@@ -477,6 +613,7 @@ async function refresh() {
   if(weekPanel.open && weekKey && weekKey!==el('day').value+'/'+activityRevision) resetWeek();
   if (loading) { pendingRefresh=true; return; }
   loading=true;
+  void syncFocus();
   const day=followToday?'':el('day').value;
   const revision=activityRevision;
   const unchanged=()=>revision===activityRevision && day===(followToday?'':el('day').value);

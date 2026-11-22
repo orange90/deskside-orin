@@ -45,6 +45,13 @@ def initialize():
             CREATE INDEX IF NOT EXISTS tasks_by_kind ON tasks(kind);
             CREATE TABLE IF NOT EXISTS completed_todos (
                 task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE);
+            CREATE TABLE IF NOT EXISTS focus_sessions (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, minutes INTEGER NOT NULL CHECK(minutes BETWEEN 1 AND 180),
+                task_id TEXT, started_at REAL NOT NULL, due_at REAL NOT NULL CHECK(due_at>started_at),
+                ended_at REAL, state TEXT NOT NULL CHECK(state IN ('active','finished','stopped')),
+                CHECK((state='active' AND ended_at IS NULL) OR
+                      (state!='active' AND ended_at IS NOT NULL AND ended_at BETWEEN started_at AND due_at)));
+            CREATE UNIQUE INDEX IF NOT EXISTS one_active_focus ON focus_sessions(state) WHERE state='active';
             CREATE TABLE IF NOT EXISTS activity_annotations (
                 id INTEGER PRIMARY KEY, start REAL NOT NULL, end REAL NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('sit','stand','away')),
@@ -271,13 +278,24 @@ def set_todo_completed(task_id, completed):
         return {"id": task_id, "body": row['body'], "completed": completed}
 
 
-def record_due_reminders():
-    now = time.time()
+def settle_due_focus(db, now):
+    """Finish and notify atomically within the caller's write transaction."""
+    active = db.execute("SELECT id,title,minutes FROM focus_sessions WHERE state='active' AND due_at<=?",
+                        (now,)).fetchone()
+    if active is not None:
+        db.execute("UPDATE focus_sessions SET state='finished',ended_at=due_at WHERE id=?", (active['id'],))
+        body = f"专注计时结束：{active['title']}（{active['minutes']} 分钟）"
+        db.execute("INSERT INTO notes(kind,body,at) VALUES ('reminder',?,?)", (body, now))
+
+
+def record_due_reminders(now=None):
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
+        now = time.time() if now is None else now
         db.execute("INSERT INTO notes(kind,body,at) SELECT 'reminder',body,? FROM tasks "
                    "WHERE due<=? AND fired=0 ORDER BY due", (now, now))
         db.execute("UPDATE tasks SET fired=1 WHERE due<=? AND fired=0", (now,))
+        settle_due_focus(db, now)
 
 
 def annotate_activity(start, end, state, reason):
