@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, StrictBool
 import store
 import focus_sessions
 import field_trials
+import reminder_queue
 import interval_corrections
 import activity_evidence
 import model_registry
@@ -513,6 +514,13 @@ class TrialLabel(BaseModel):
     state: str
 
 
+class ReminderChange(BaseModel):
+    id: str = Field(strict=True, min_length=1)
+    request_id: uuid.UUID
+    action: str
+    expected_due: float = Field(strict=True, allow_inf_nan=False)
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return (ROOT / "dashboard.html").read_text()
@@ -633,6 +641,26 @@ def reminder_feed(after: int = 0):
             (max(0, after),))]
         newest = db.execute("SELECT COALESCE(MAX(id),0) FROM notes WHERE kind='reminder'").fetchone()[0]
     return {"reminders": rows, "latest_id": newest}
+
+
+@app.get("/api/reminders/pending")
+def pending_reminders(cursor: str | None = None):
+    try:
+        return reminder_queue.list_pending(cursor)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/reminders/manage")
+def change_reminder(item: ReminderChange):
+    try:
+        return reminder_queue.change(item.id, item.request_id, item.action, item.expected_due)
+    except KeyError:
+        raise HTTPException(404, "找不到该提醒") from None
+    except reminder_queue.ReminderConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/api/models")

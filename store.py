@@ -43,6 +43,11 @@ def initialize():
                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL,
                 due REAL, fired INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS tasks_by_kind ON tasks(kind);
+            CREATE INDEX IF NOT EXISTS pending_reminder_times ON tasks(kind,fired,due,id)
+                WHERE kind='reminder' AND fired=0;
+            CREATE TABLE IF NOT EXISTS reminder_changes (
+                request_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, action TEXT NOT NULL,
+                expected_due REAL NOT NULL, result_due REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS completed_todos (
                 task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS focus_sessions (
@@ -318,8 +323,8 @@ def record_due_reminders(now=None):
         db.execute("BEGIN IMMEDIATE")
         now = time.time() if now is None else now
         db.execute("INSERT INTO notes(kind,body,at) SELECT 'reminder',body,? FROM tasks "
-                   "WHERE due<=? AND fired=0 ORDER BY due", (now, now))
-        db.execute("UPDATE tasks SET fired=1 WHERE due<=? AND fired=0", (now,))
+                   "WHERE kind='reminder' AND due<=? AND fired=0 ORDER BY due,id", (now, now))
+        db.execute("UPDATE tasks SET fired=1 WHERE kind='reminder' AND due<=? AND fired=0", (now,))
         settle_due_focus(db, now)
 
 

@@ -106,6 +106,13 @@
 #evidence-status{font-size:12px;margin:6px 0}#evidence-status:empty{display:none}
 #evidence-retry{font-size:12px;padding:4px 8px}
 @media(max-width:480px){.evidence-grid{grid-template-columns:1fr;gap:8px}}
+.reminder-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+.reminder-row div:first-child{min-width:0;overflow-wrap:anywhere}.reminder-row time{display:block;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.reminder-actions{display:flex;gap:5px;flex-wrap:wrap}.reminder-actions button{padding:5px 8px;font-size:12px;min-height:32px}.reminder-actions button[aria-disabled=true]{opacity:.55;cursor:default}
+#reminder-uncertain{font-size:12px;overflow-wrap:anywhere}#reminder-repeat{font-size:12px}
+#reminder-recent{border-top:1px solid var(--line);margin-top:12px;padding-top:10px;font-size:12px}
+#reminder-recent summary{cursor:pointer}#reminder-history{padding:0;margin:3px 0;max-height:200px;overflow:auto}
+#reminder-history li{list-style:none;padding:6px 0;overflow-wrap:anywhere}#reminder-history small{display:block;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -180,12 +187,15 @@
     <button type="button" data-inbox="done" aria-pressed="false">已完成</button>
     <button type="button" data-inbox="reminders" aria-pressed="false">提醒</button>
   </div>
+  <p class="muted" id="pending-caption" hidden>待发提醒 · 按到期时间排序（北京时间）</p>
   <ul id="tasks" aria-label="待办列表"><li class="muted">正在读取…</li></ul>
   <nav class="inbox-pages" id="inbox-pages" aria-label="待办分页" hidden>
     <button type="button" id="inbox-prev">上一页</button><span id="inbox-page-number"></span><button type="button" id="inbox-next">下一页</button>
   </nav>
   <p id="inbox-error" role="status" hidden><span id="inbox-error-message"></span> <button type="button" id="inbox-retry">重新读取</button></p>
   <p id="inbox-notice" role="status"></p>
+  <p id="reminder-uncertain" hidden><span role="status" id="reminder-result"></span> <button type="button" id="reminder-repeat">重试同一操作</button></p>
+  <details id="reminder-recent" hidden><summary>最近已处理的提醒</summary><ul id="reminder-history"></ul></details>
 </section></section>
 <details id="settings-panel" class="card details" style="margin-top:20px"><summary>目标设置与摄像头选区</summary><form id="settings" class="settings-grid"><label>每日站立目标 / 分钟<input id="stand" type="number" min="1" max="1440" required></label><label>连续久坐提醒 / 分钟<input id="sit" type="number" min="1" max="1440" required></label><button class="primary">保存设置</button></form><div class="calibration"><p>坐站使用相对姿态估计，无需贴标或记录固定高度。桌沿档位校准可选。预览中点击两个对角可设置选区。</p><button id="show">查看当前画面</button><select id="region" aria-label="摄像头选区类型"><option value="person">桌前人物区域</option><option value="cosmos">Cosmos 摘要区域</option><option value="desk">桌沿区域</option></select><div><img id="frame" hidden alt="当前本机摄像头画面"></div><button data-point="low">记录桌低档</button><button data-point="high">记录桌高档</button></div></details>
 <footer class="footer"><span>桌间 · DESKSIDE &nbsp; / &nbsp; 本地感知，安静陪伴</span><span id="updated">图表每 15 秒静默更新 · 历史数据保留</span></footer>
@@ -548,17 +558,100 @@ el('focus-detach').onclick=()=>{selectFocusSource(null);el('focus-title').focus(
 el('focus-retry').onclick=()=>syncFocus();
 setInterval(tickFocus,1000);
 let inboxView='open', inboxTrail=[null], inboxNext=null, inboxSignature='', inboxItems=[];
-let inboxRead=0, inboxReading='', revealTaskId=null;
+let inboxPage=0, inboxRead=0, inboxReading='', revealTaskId=null;
 const savingTodos=new Set(), inboxTabs=document.querySelectorAll('[data-inbox]');
 
+let confirmReminder=null, reminderOperation=null, reminderWriting=false, remindersOnline=false;
+const reminderClock=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+function reminderTime(due){
+  const date=new Date(due*1000);
+  return due==null?'无到期时间':Number.isNaN(date.getTime())?'超出可显示日期':reminderClock.format(date);
+}
+const reminderStorage='deskside.pending-reminder-operation';
+function setReminderOperation(operation){
+  reminderOperation=operation;
+  try{
+    if(operation) sessionStorage.setItem(reminderStorage,JSON.stringify(operation));
+    else sessionStorage.removeItem(reminderStorage);
+  }catch{}
+}
+try{
+  const saved=JSON.parse(sessionStorage.getItem(reminderStorage));
+  if(saved && typeof saved.id==='string' && typeof saved.request_id==='string' &&
+     Number.isFinite(saved.expected_due) && ['snooze','cancel'].includes(saved.action)){
+    reminderOperation=saved;
+    text('reminder-result','原定于 '+reminderTime(saved.expected_due)+' 的提醒有一项'+(saved.action==='cancel'?'取消':'延后')+'操作待核对。');
+  }
+}catch{}
+function reminderControls(){
+  const blocked=!!reminderOperation || !remindersOnline;
+  for(const button of document.querySelectorAll('#tasks [data-reminder-action]')) button.setAttribute('aria-disabled',String(blocked));
+  el('reminder-uncertain').hidden=inboxView!=='reminders' || !reminderOperation || reminderWriting;
+}
+function reminderRow(item){
+  const row=make('li','reminder-row'), detail=make('div','',item.body), actions=make('div','reminder-actions');
+  detail.append(make('time','',reminderTime(item.due)));
+  function button(action,label,handler){
+    const b=make('button','',label);
+    b.type='button'; b.dataset.taskId=item.id; b.dataset.reminderAction=action;
+    b.setAttribute('aria-label',label+' · '+item.body);
+    b.onclick=()=>{if(!reminderOperation && remindersOnline) handler()};
+    actions.append(b);
+  }
+  if(confirmReminder?.id===item.id && confirmReminder.due===item.due){
+    button('confirm','确认取消',()=>manageReminder(item,'cancel'));
+    button('keep','保留',()=>{confirmReminder=null;renderInbox(inboxItems)});
+  }else{
+    button('snooze','延后10分钟',()=>manageReminder(item,'snooze'));
+    button('cancel','取消',()=>{confirmReminder={id:item.id,due:item.due};renderInbox(inboxItems)});
+  }
+  row.append(detail,actions); return row;
+}
+function renderReminderHistory(){
+  const recent=data?.tasks.filter(t=>t.kind==='reminder' && (t.fired===1 || t.fired===2)) || [];
+  const rows=recent.map(t=>{
+    const row=make('li','task-item',t.body);
+    row.append(make('small','',reminderTime(t.due)+' · '+(t.fired===2?'已取消':'已提醒')));
+    return row;
+  });
+  el('reminder-history').replaceChildren(...rows,make('li','hardware-sub',!data?'等待记录同步。':
+    recent.length?'显示最近 50 条任务中的记录。':'最近 50 条任务中没有已处理的提醒。'));
+}
+async function manageReminder(item,action){
+  if(reminderWriting || inboxView!=='reminders') return;
+  if(item){
+    if(reminderOperation || !remindersOnline || !inboxItems.some(t=>t.id===item.id && t.due===item.due)) return;
+    setReminderOperation({id:item.id,expected_due:item.due,action,request_id:crypto.randomUUID()});
+    text('reminder-result','「'+item.body+'」的'+(action==='cancel'?'取消':'延后')+'结果尚未确认。');
+  }
+  if(!reminderOperation) return;
+  const page=inboxPage;
+  reminderWriting=true; inboxRead++; inboxReading=''; confirmReminder=null;
+  text('inbox-notice','正在处理…'); reminderControls();
+  try{
+    const result=await request('/api/reminders/manage',reminderOperation,10000);
+    setReminderOperation(null);
+    if(page===inboxPage) text('inbox-notice',result.action==='cancel'?'已取消提醒。':'已延后至 '+reminderTime(result.due)+'。');
+  }catch(error){
+    if(error.status>=400 && error.status<500) setReminderOperation(null);
+    if(page===inboxPage) text('inbox-notice',reminderOperation?'':error.message);
+  }finally{
+    reminderWriting=false; remindersOnline=false; reminderControls();
+    if(inboxView==='reminders') void readInbox();
+    void refresh();
+  }
+}
+el('reminder-repeat').onclick=()=>manageReminder();
 function showInboxPage(focusList=false){
+  const page=++inboxPage; confirmReminder=null; remindersOnline=false;
   inboxSignature=''; inboxItems=[]; inboxNext=null; inboxReading=''; inboxRead++;
+  text('inbox-notice',''); reminderControls();
   el('tasks').replaceChildren(make('li','muted','正在读取…'));
   el('inbox-error').hidden=true;
   el('inbox-pages').hidden=true;
   readInbox().then(()=>{
-    if(focusList && document.activeElement===document.body){
-      const target=el('tasks').querySelector('input') || document.querySelector('[data-inbox="'+inboxView+'"]');
+    if(focusList && page===inboxPage && document.activeElement===document.body){
+      const target=el('tasks').querySelector('input,button') || document.querySelector('[data-inbox="'+inboxView+'"]');
       target.focus({preventScroll:true});
     }
   });
@@ -569,24 +662,23 @@ function selectInbox(view){
     const active=tab.dataset.inbox===view;
     tab.classList.toggle('active',active); tab.setAttribute('aria-pressed',String(active));
   }
-  el('tasks').setAttribute('aria-label',{open:'待办列表',done:'已完成列表',reminders:'最近提醒'}[view]);
-  text('inbox-notice','');
+  el('tasks').setAttribute('aria-label',{open:'待办列表',done:'已完成列表',reminders:'待发提醒'}[view]);
+  el('inbox-pages').setAttribute('aria-label',view==='reminders'?'提醒分页':'待办分页');
+  el('pending-caption').hidden=el('reminder-recent').hidden=view!=='reminders';
+  if(view==='reminders') renderReminderHistory();
   showInboxPage();
 }
 function renderInbox(items){
-  const list=el('tasks'), signature=JSON.stringify(items);
+  if(confirmReminder && !items.some(t=>t.id===confirmReminder.id && t.due===confirmReminder.due)) confirmReminder=null;
+  const list=el('tasks'), signature=JSON.stringify(inboxView==='reminders'?[items,confirmReminder]:items);
   if(inboxSignature===signature) return;
   inboxItems=items;
   const focused=document.activeElement?.dataset.taskId;
+  const oldAction=document.activeElement?.dataset.reminderAction;
   const control=document.activeElement?.tagName==='BUTTON'?'button':'input';
   const oldIndex=focused===undefined?-1:Array.from(list.querySelectorAll(control)).indexOf(document.activeElement);
   const nodes=items.map(item=>{
-    if(inboxView==='reminders'){
-      const row=make('li','task-item',item.body);
-      const when=new Date(item.due*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'});
-      row.append(make('small','',when+' · '+(item.fired?'已提醒':'等待提醒')));
-      return row;
-    }
+    if(inboxView==='reminders') return reminderRow(item);
     const row=make('li','inbox-task'), label=make('label'), box=make('input');
     box.type='checkbox'; box.checked=item.completed; box.dataset.taskId=item.id;
     box.setAttribute('aria-label',(item.completed?'恢复待办 · ':'完成待办 · ')+item.body);
@@ -601,31 +693,33 @@ function renderInbox(items){
     }
     return row;
   });
-  const emptyText={open:'这一页没有待处理的待办。',done:'这一页没有已完成的待办。',reminders:'最近 50 条任务中没有提醒。'};
+  const emptyText={open:'这一页没有待处理的待办。',done:'这一页没有已完成的待办。',reminders:inboxTrail.length===1?'目前没有待发提醒。':'这一页没有待发提醒。'};
   list.replaceChildren(...(nodes.length?nodes:[make('li','muted',emptyText[inboxView])]));
-  if(inboxView==='reminders' && nodes.length) list.append(make('li','hardware-sub','显示最近 50 条任务中的提醒 · 北京时间'));
+  if(inboxView==='reminders') reminderControls();
   inboxSignature=signature;
   if(oldIndex>=0){
     const boxes=Array.from(list.querySelectorAll(control));
-    const next=boxes.find(b=>b.dataset.taskId===focused) || boxes[Math.min(oldIndex,boxes.length-1)] ||
+    const same=boxes.filter(b=>b.dataset.taskId===focused);
+    const next=same.find(b=>b.dataset.reminderAction===oldAction) ||
+      same.find(b=>b.dataset.reminderAction===(oldAction==='cancel'?'keep':'cancel')) ||
+      boxes[Math.min(oldIndex,boxes.length-1)] ||
       document.querySelector('[data-inbox="'+inboxView+'"]');
     next.focus({preventScroll:true});
   }
 }
 async function readInbox(){
-  if(inboxView==='reminders'){
-    if(data){renderInbox(data.tasks.filter(t=>t.kind==='reminder'));el('inbox-error').hidden=true;}
-    else{el('tasks').replaceChildren();text('inbox-error-message','提醒记录暂不可用。');el('inbox-error').hidden=false;}
-    return;
-  }
-  const before=inboxTrail[inboxTrail.length-1], key=inboxView+'/'+before;
-  if(inboxReading===key || savingTodos.size) return;
+  const reminders=inboxView==='reminders', before=inboxTrail[inboxTrail.length-1], key=inboxView+'/'+before;
+  if(inboxReading===key || (reminders?reminderWriting:savingTodos.size)) return;
+  const path=reminders?'/api/reminders/pending'+(before?'?cursor='+encodeURIComponent(before):''):
+    '/api/todos?completed='+(inboxView==='done')+(before?'&before='+encodeURIComponent(before):'');
   const generation=++inboxRead;
   inboxReading=key;
   try{
-    const result=await request('/api/todos?completed='+(inboxView==='done')+(before?'&before='+encodeURIComponent(before):''));
+    const result=await request(path);
     if(generation!==inboxRead) return;
+    if(reminders) remindersOnline=true;
     renderInbox(result.items);
+    if(reminders) reminderControls();
     inboxNext=result.next_cursor;
     el('inbox-error').hidden=true;
     el('inbox-pages').hidden=inboxTrail.length===1 && !inboxNext;
@@ -634,7 +728,8 @@ async function readInbox(){
   }catch(error){
     if(generation===inboxRead){
       if(!inboxSignature) el('tasks').replaceChildren();
-      text('inbox-error-message','待办列表读取失败。'); el('inbox-error').hidden=false;
+      if(reminders){remindersOnline=false;reminderControls()}
+      text('inbox-error-message',reminders?'待发提醒读取失败。':'待办列表读取失败。'); el('inbox-error').hidden=false;
       if(inboxTrail.length>1){
         el('inbox-pages').hidden=false; el('inbox-prev').disabled=false; el('inbox-next').disabled=true;
         text('inbox-page-number','第 '+inboxTrail.length+' 页');
@@ -643,7 +738,7 @@ async function readInbox(){
   }finally{if(generation===inboxRead) inboxReading=''}
 }
 async function setTodoCompletion(item,box){
-  const completed=!item.completed;
+  const completed=!item.completed, page=inboxPage;
   if(savingTodos.has(item.id)){box.checked=completed;return}
   savingTodos.add(item.id); inboxRead++; inboxReading='';
   box.setAttribute('aria-disabled','true');
@@ -651,9 +746,9 @@ async function setTodoCompletion(item,box){
     await request('/api/todos/completion',{id:item.id,completed},10000);
     if(inboxView===(item.completed?'done':'open') && inboxItems.some(t=>t.id===item.id))
       renderInbox(inboxItems.filter(t=>t.id!==item.id));
-    text('inbox-notice',completed?'已移到「已完成」。':'已恢复到「待办」。');
+    if(page===inboxPage) text('inbox-notice',completed?'已移到「已完成」。':'已恢复到「待办」。');
   }catch(error){
-    text('inbox-notice',error.status?error.message:'未收到更改结果，请核对待办状态。');
+    if(page===inboxPage) text('inbox-notice',error.status?error.message:'未收到更改结果，请核对待办状态。');
   }finally{
     box.checked=item.completed; box.removeAttribute('aria-disabled');
     savingTodos.delete(item.id);
@@ -666,7 +761,10 @@ function updateInbox(){
   if(created){
     revealTaskId=null;
     selectInbox(created.kind==='reminder'?'reminders':'open');
-  }else void readInbox();
+  }else{
+    if(inboxView==='reminders') renderReminderHistory();
+    void readInbox();
+  }
 }
 async function queryWithTaskId(path,body,id=crypto.randomUUID(),timeout){
   const reply=await request(path,{...body,id},timeout);
@@ -676,7 +774,7 @@ async function queryWithTaskId(path,body,id=crypto.randomUUID(),timeout){
 inboxTabs.forEach(tab=>tab.onclick=()=>{if(tab.dataset.inbox!==inboxView) selectInbox(tab.dataset.inbox)});
 el('inbox-prev').onclick=()=>{if(inboxTrail.length>1){inboxTrail.pop();showInboxPage(true)}};
 el('inbox-next').onclick=()=>{if(inboxNext){inboxTrail.push(inboxNext);showInboxPage(true)}};
-el('inbox-retry').onclick=()=>inboxView==='reminders'?refresh():readInbox();
+el('inbox-retry').onclick=()=>readInbox();
 async function refresh() {
   if(segmentModal.open) updateSegmentForm();
   el('open-absence').hidden=!(data && el('day').value===data.date && data.date<data.today);
@@ -698,7 +796,7 @@ async function refresh() {
       updateInbox();
       el('error').hidden=true; text('connection','● 本机已连接 · 数据不上传');
     } else if (unchanged()) {
-      if(!data) void readInbox();
+      if(!data || inboxView==='reminders') void readInbox();
       if(weekPanel.open && !weekKey){
         text('week-status','未能读取所选日期的记录。'); el('week-retry').hidden=false;
       }

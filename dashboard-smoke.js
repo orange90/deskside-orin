@@ -2,6 +2,18 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const controls=new Map(),requests=[],storage=new Map();
 class Node {constructor(){this.value='';this.checked=false;this.textContent='';this.hidden=false;this.style={};this.children=[];this.classList={toggle(){}};this.dataset={};}append(...nodes){this.children.push(...nodes)}replaceChildren(...nodes){this.children=nodes}setAttribute(k,v){this[k]=v}removeAttribute(k){delete this[k]}addEventListener(){}querySelector(){return null}getContext(){return {clearRect(){}}}showModal(){}close(){}}
+// Only data-attribute selectors are needed by the simulated inbox controls.
+Node.prototype.querySelectorAll = function(selector) {
+  const attribute = selector.match(/\[data-([a-z-]+)\]/);
+  if (!attribute) return [];
+  const key = attribute[1].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+  const matches = [];
+  for (const child of this.children) {
+    if (child.dataset?.[key] !== undefined) matches.push(child);
+    if (child.querySelectorAll) matches.push(...child.querySelectorAll(selector));
+  }
+  return matches;
+};
 const el=id=>{if(!controls.has(id))controls.set(id,new Node());return controls.get(id)};
 const start=Date.parse('2026-11-11T00:00:00+08:00')/1000;
 const fixture={date:'2026-11-11',today:'2026-11-11',first_date:'2026-11-10',start,end:start+86400,cutoff:start+3600,as_of:start+3600,totals:{sit:120},settings:{sit_minutes:50,stand_minutes:60},intervals:[],notes:[{kind:'reminder',body:'本地文字提醒',start,end:start,count:1}],active_reminders:[],tasks:[],camera:{ready:true,person:'sit',presence:'present',fps:6},hourly:Array.from({length:24},(_,hour)=>({hour,sit:0,stand:0,away:0,unknown:0,privacy:0}))};
@@ -71,4 +83,20 @@ inboxTabs[1].onclick();
 await new Promise(setImmediate);
 assert.equal(taskBox().checked, true);
 assert.ok(requests.some(r=>r.path==='/api/todos?completed=true'));
-console.log('Dashboard focus, todo, voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});
+assert.ok(!requests.some(r => r.path.startsWith('/api/reminders/pending')));
+const reminder = {id:'old / 1', body:'记得核对', due:start+600};
+replies['/api/reminders/pending'] = {items:[reminder], next_cursor:null, server_now:start};
+inboxTabs[2].onclick();
+await new Promise(setImmediate);
+const actions = () => el('tasks').querySelectorAll('[data-reminder-action]');
+assert.deepEqual(actions().map(button=>button.dataset.reminderAction), ['snooze','cancel']);
+actions().find(button=>button.dataset.reminderAction==='cancel').onclick();
+assert.deepEqual(actions().map(button=>button.dataset.reminderAction), ['confirm','keep']);
+replies['/api/reminders/manage'] = {id:reminder.id, action:'cancel', due:reminder.due};
+replies['/api/reminders/pending'] = {items:[], next_cursor:null, server_now:start};
+actions().find(button=>button.dataset.reminderAction==='confirm').onclick();
+await new Promise(setImmediate);
+assert.deepEqual(requests.find(r=>r.path==='/api/reminders/manage').body,
+  {id:reminder.id, request_id:'fixture', action:'cancel', expected_due:reminder.due});
+assert.match(el('tasks').children[0].textContent,/没有待发提醒/);
+console.log('Dashboard reminders, focus, todo, voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});
