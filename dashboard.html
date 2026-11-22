@@ -87,6 +87,15 @@
 .inbox-task{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .inbox-task label{flex:1;min-width:0}
 .focus-task{flex:none;line-height:1;font-size:18px;padding:5px 8px;border:0;color:var(--green)}
+.interval-edit{margin-left:7px;font-size:11px;padding:2px 7px;border-radius:6px;color:var(--green)}
+#segment-history{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}
+#segment-history summary{font-size:13px;cursor:pointer}
+#segment-edits{list-style:none;margin:8px 0 0;padding:0;max-height:220px;overflow:auto}
+#segment-edits li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;font-size:12px}
+#segment-edits button{flex:none;font-size:12px;padding:5px 9px}
+#segment-notice{font-size:12px;margin-top:8px}#segment-notice:empty{display:none}
+#segment-status{color:var(--ink)}#segment-status:empty{display:none}
+#segment-details{font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -150,7 +159,9 @@
 <section id="workflow" class="section-block"><div class="section-title"><div><h2>模型如何协同工作</h2><p>点击模型查看详情与本机可用选项</p></div><span class="muted" style="font-size:11px">全链路端侧运行</span></div><div class="card">
 <div class="flow"><div class="flow-label">视觉感知<small id="vision-flow-status">摄像头 → 选帧</small></div><button class="node" data-model="pose"><span class="node-type">01 / 人体检测与姿态 <span>↗</span></span><strong>YOLO26m-Pose</strong><small>TensorRT FP16 · 共用一个引擎</small></button><span class="flow-arrow">→</span><div class="node"><span class="node-type">02 / 连续状态</span><strong>动作与时间融合</strong><small>短暂未知补齐 · 遮挡保护</small></div><span class="flow-arrow">→</span><button class="node" data-model="cosmos"><span class="node-type">03 / 按需视觉复核 <span>↗</span></span><strong>Cosmos3-Edge</strong><small>选帧复核 · 活动摘要</small></button></div>
 <div class="flow"><div class="flow-label">语音交互<small>麦克风 → 按需录音</small></div><button class="node" data-model="asr"><span class="node-type">01 / 中文语音识别 <span>↗</span></span><strong id="asr-name">Whisper small</strong><small>点击切换本地模型</small></button><span class="flow-arrow">→</span><button class="node" data-model="qwen"><span class="node-type">02 / 规则路由 + 问答 <span>↗</span></span><strong>Qwen3.5-4B</strong><small>开放问答 · 任务解析</small></button><span class="flow-arrow">→</span><div class="node node-output"><span class="node-type">03 / 本地执行</span><strong>文字回复与记录</strong><small>SQLite · 待办 · 提醒</small></div></div><div class="flow-footer"><span>视觉结果 → 稳定状态判断 → 本地记录 → 活动图表</span><span>统计查询与明确任务直接读写本地数据</span></div></div></section>
-<div class="lower-grid"><section class="card" id="records"><div class="section-head"><h2>活动时间段</h2><span class="muted" id="interval-count"></span></div><div class="tabs" role="group" aria-label="记录类型"><button class="active" data-kind="person">坐站与离开</button><button data-kind="presence">工位在位</button><button data-kind="desk">桌面档位</button></div><ul id="timeline" class="record-list"></ul><button id="more-intervals" class="more" hidden>查看更多时间段</button></section>
+<div class="lower-grid"><section class="card" id="records"><div class="section-head"><h2 id="records-heading" tabindex="-1">活动时间段</h2><span class="muted" id="interval-count"></span></div><div class="tabs" role="group" aria-label="记录类型"><button class="active" data-kind="person">坐站与离开</button><button data-kind="presence">工位在位</button><button data-kind="desk">桌面档位</button></div><ul id="timeline" class="record-list"></ul><button id="more-intervals" class="more" hidden>查看更多时间段</button>
+<details id="segment-history" hidden><summary id="segment-count">本日分段校正</summary><ul id="segment-edits"></ul></details>
+<p id="segment-notice" role="status"></p></section>
 <section class="card"><div class="section-head"><h2>这一段，发生了什么</h2><span class="muted" id="summary-count"></span></div><div class="tabs" role="group" aria-label="摘要类型"><button class="active" data-note="cosmos">画面摘要</button><button data-note="dialogue">已保存对话</button><button data-note="reminder">提醒</button></div><div id="notes" class="record-list"></div><button id="more-notes" class="more" hidden>查看更多摘要</button><p class="hardware-sub" style="margin-top:15px">相同摘要按连续观察段合并；时间范围表示首末采样时刻。原始记录保留。</p></section></div>
 <section id="assistant" class="ask-grid"><div class="card"><div class="section-head"><div><h2>和本地助手聊聊</h2><p class="muted">查询坐站记录，添加待办，或设置文字提醒</p></div><span style="color:#789368">✳</span></div><form id="question" class="ask-form"><input id="query" maxlength="500" placeholder="我今天坐了多久？" aria-label="向本地助手提问" required><button id="send" class="primary">发送</button></form><div class="voice-row"><button id="voice">开始语音提问</button><span>使用 Orin 麦克风</span><label><input id="voice-review" type="checkbox">校对后发送</label><label><input id="save" type="checkbox">保存这次对话</label></div><p id="feedback" class="feedback" role="status">答复会显示在这里。</p><ul id="reminder-notes"></ul></div><section class="card" id="inbox" aria-labelledby="inbox-title">
   <div class="section-head"><h2 id="inbox-title">待办与提醒</h2></div>
@@ -180,6 +191,18 @@
     </div>
     <p id="voice-draft-status" role="status"></p>
     <div class="modal-actions"><button id="voice-draft-discard" type="button">放弃草稿</button><button id="voice-draft-send" class="primary">发送给助手</button></div>
+  </form>
+</dialog>
+<dialog id="segment-modal" class="modal" aria-labelledby="segment-title" aria-describedby="segment-details">
+  <div class="modal-head"><h2 id="segment-title">校正这段活动</h2></div>
+  <p id="segment-details"></p>
+  <form id="segment-form">
+    <label>校正为 <select id="segment-state" required>
+      <option value="" disabled selected>请选择状态</option><option value="sit">坐姿</option>
+      <option value="stand">站姿</option><option value="away">离开</option>
+    </select></label>
+    <p id="segment-status" role="status"></p>
+    <div class="modal-actions"><button type="button" id="segment-cancel">取消</button><button class="primary" id="segment-apply" disabled>保存校正</button></div>
   </form>
 </dialog>
 <dialog id="absence-modal" class="modal" aria-labelledby="absence-title" aria-describedby="absence-description">
@@ -256,7 +279,36 @@ function drawHours() {
     if(row.hour%3===0) svgText(svg,x+w/2,142,String(row.hour).padStart(2,'0')+':00',{'text-anchor':'middle'});
   }
 }
-function renderIntervals(){const list=el('timeline'),rows=data.intervals.filter(i=>i.kind===selectedKind).sort((a,b)=>b.start-a.start);text('interval-count',`${rows.length} 个时间段`);list.replaceChildren();rows.slice(0,intervalLimit).forEach((row,index)=>{const li=make('li','record'),time=make('time','',`${precise(row.start)} – ${precise(row.end)}`),body=make('div','',names[row.state]||row.state);if(row.source==='manual')body.append(make('span','record-note','人工确认'));if(row.source==='estimated')body.append(make('span','record-note','在位姿态推测'));if(row.source==='continuity')body.append(make('span','record-note','含连续性推算 '+duration(row.inferred_seconds)));if(index===0&&data.date===data.today&&data.as_of-row.end<30)body.append(make('span','record-note','最近记录'));li.append(time,key(row.state),body,make('span','duration',duration(row.end-row.start)));list.append(li)});if(!rows.length)empty(list,'这一天还没有相关记录');el('more-intervals').hidden=rows.length<=intervalLimit}
+function renderIntervals(){
+  const list=el('timeline'), day=data.date, focused=document.activeElement?.dataset.segment;
+  const rows=data.intervals.filter(i=>i.kind===selectedKind).sort((a,b)=>b.start-a.start);
+  const privatePresence=data.intervals.filter(i=>i.kind==='presence' && i.state==='privacy');
+  let restore;
+  text('interval-count',rows.length+' 个时间段'); list.replaceChildren();
+  rows.slice(0,intervalLimit).forEach((row,index)=>{
+    const li=make('li','record'), time=make('time','',precise(row.start)+' – '+precise(row.end));
+    const body=make('div','',names[row.state]||row.state);
+    if(row.kind==='person' && ['sit','stand','away','unknown'].includes(row.state) && row.source!=='manual' &&
+       row.annotation_id==null && !privatePresence.some(p=>p.start<row.end && p.end>row.start)){
+      const edit=make('button','interval-edit','校正');
+      edit.type='button'; edit.dataset.segment=[day,row.start,row.end].join('/');
+      edit.setAttribute('aria-label','校正 '+time.textContent+' 的'+names[row.state]);
+      edit.setAttribute('aria-haspopup','dialog');
+      edit.onclick=()=>openSegment(day,row);
+      body.append(edit);
+      if(focused===edit.dataset.segment) restore=edit;
+    }
+    if(row.source==='manual') body.append(make('span','record-note','人工确认'));
+    if(row.source==='estimated') body.append(make('span','record-note','在位姿态推测'));
+    if(row.source==='continuity') body.append(make('span','record-note','含连续性推算 '+duration(row.inferred_seconds)));
+    if(index===0 && day===data.today && data.as_of-row.end<30) body.append(make('span','record-note','最近记录'));
+    li.append(time,key(row.state),body,make('span','duration',duration(row.end-row.start))); list.append(li);
+  });
+  if(!rows.length) empty(list,'这一天还没有相关记录');
+  el('more-intervals').hidden=rows.length<=intervalLimit;
+  if(focused) (restore||el('records-heading')).focus({preventScroll:true});
+  renderSegmentHistory();
+}
 function renderNotes(){const list=el('notes'),rows=data.notes.filter(n=>n.kind===selectedNote);text('summary-count',selectedNote==='cosmos'?`${rows.reduce((s,n)=>s+n.count,0)} 条观察 → ${rows.length} 段`:`${rows.length} 条`);list.replaceChildren();rows.slice(0,noteLimit).forEach(n=>{const div=make('div','note-record'),body=make('div');div.append(make('time','',n.count>1?`${at(n.start)} – ${at(n.end)}`:precise(n.start)));body.append(make('div','body',n.body));if(n.count>1)body.append(make('span','count-tag',`${n.count} 次相同观察 · 已合并`));div.append(body);list.append(div)});if(!rows.length)empty(list,selectedNote==='dialogue'?'这一天没有保存的对话':'这一天还没有相关记录');el('more-notes').hidden=rows.length<=noteLimit}
 function postureRuns(intervals) {
   const runs = [];
@@ -609,6 +661,7 @@ el('inbox-prev').onclick=()=>{if(inboxTrail.length>1){inboxTrail.pop();showInbox
 el('inbox-next').onclick=()=>{if(inboxNext){inboxTrail.push(inboxNext);showInboxPage(true)}};
 el('inbox-retry').onclick=()=>inboxView==='reminders'?refresh():readInbox();
 async function refresh() {
+  if(segmentModal.open) updateSegmentForm();
   el('open-absence').hidden=!(data && el('day').value===data.date && data.date<data.today);
   if(weekPanel.open && weekKey && weekKey!==el('day').value+'/'+activityRevision) resetWeek();
   if (loading) { pendingRefresh=true; return; }
@@ -657,6 +710,99 @@ async function refresh() {
     if(pendingRefresh){pendingRefresh=false;void refresh()}
   }
 }
+const segmentModal=el('segment-modal'), segmentState=el('segment-state');
+const segmentTime=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',
+  hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,hourCycle:'h23'});
+let segmentSelection=null, segmentBusy=false, segmentAttempt=null, segmentHistoryKey='', segmentHistoryDay='';
+function segmentRange(row){
+  return segmentTime.format(row.start*1000)+' 至 '+segmentTime.format(row.end*1000);
+}
+function updateSegmentForm(){
+  const stale=segmentSelection?.date!==el('day').value || segmentSelection?.date!==data?.date;
+  segmentState.disabled=segmentBusy || stale;
+  el('segment-cancel').disabled=segmentBusy;
+  el('segment-apply').disabled=segmentState.disabled || !segmentState.value;
+  const warning='看板日期已切换，请关闭后重新选择时间段。';
+  if(stale) text('segment-status',warning);
+  else if(el('segment-status').textContent===warning) text('segment-status','');
+}
+function openSegment(day,row){
+  if(segmentBusy || day!==el('day').value) return;
+  segmentSelection={date:day,start:row.start,end:row.end};
+  segmentState.value='';
+  const source={estimated:'（推测）',continuity:'（含连续性推算）'}[row.source] || '';
+  text('segment-details','北京时间 '+segmentRange(row)+'。原状态为'+names[row.state]+source+'。');
+  text('segment-status','');
+  updateSegmentForm();
+  segmentModal.showModal();
+}
+function renderSegmentHistory(){
+  if(segmentModal.open) updateSegmentForm();
+  const groups=new Map();
+  for(const a of data.annotations || []){
+    if(!a.correction_id) continue;
+    const group=groups.get(a.correction_id);
+    if(group){group.start=Math.min(group.start,a.start);group.end=Math.max(group.end,a.end)}
+    else groups.set(a.correction_id,{id:a.correction_id,date:data.date,start:a.start,end:a.end,state:a.state});
+  }
+  const rows=[...groups.values()].sort((a,b)=>b.start-a.start);
+  const signature=JSON.stringify([data.date,rows]);
+  if(signature===segmentHistoryKey) return;
+  segmentHistoryKey=signature;
+  if(segmentHistoryDay!==data.date){text('segment-notice',''); segmentHistoryDay=data.date}
+  const focused=document.activeElement?.dataset.undoSegment, list=el('segment-edits');
+  let restore;
+  list.replaceChildren();
+  for(const row of rows){
+    const li=make('li'), undo=make('button','','撤销'), label=names[row.state]+' · '+segmentRange(row);
+    undo.type='button'; undo.dataset.undoSegment=row.id;
+    undo.setAttribute('aria-label','撤销校正 · '+label);
+    undo.onclick=()=>changeSegment(row,undo);
+    li.append(make('span','mono',label),undo);list.append(li);
+    if(focused===row.id) restore=undo;
+  }
+  text('segment-count','本日分段校正（'+rows.length+'）');
+  el('segment-history').hidden=!rows.length;
+  if(focused) (restore || el(rows.length?'segment-count':'records-heading')).focus({preventScroll:true});
+}
+async function changeSegment(undo,button){
+  const selection=undo || segmentSelection;
+  if(segmentBusy || !selection || selection.date!==el('day').value || selection.date!==data?.date || (!undo && !segmentState.value)) return;
+  const range=segmentRange(selection);
+  const target=undo?'segment-notice':'segment-status';
+  segmentBusy=true;
+  if(button) button.disabled=true;
+  if(!undo) updateSegmentForm();
+  text(target,undo?'正在撤销…':'正在保存…');
+  try{
+    if(undo) await request('/api/activity/corrections/'+encodeURIComponent(undo.id)+'/undo',{},10000);
+    else{
+      const fields={...selection,state:segmentState.value}, key=JSON.stringify(fields);
+      if(segmentAttempt?.key!==key) segmentAttempt={key,id:crypto.randomUUID()};
+      await request('/api/activity/corrections',{...fields,id:segmentAttempt.id},10000);
+      segmentModal.close(); el('segment-history').open=true;
+    }
+    segmentAttempt=null;
+    text('segment-notice',(undo?'已撤销校正':'已校正为'+names[segmentState.value])+' · '+range);
+  }catch(error){
+    text(target,error.status?error.message:'未收到确认，请重试或核对本日分段校正。');
+  }finally{
+    segmentBusy=false;
+    if(button) button.disabled=false;
+    if(segmentModal.open) updateSegmentForm();
+    activityRevision++;
+    void refresh();
+  }
+}
+segmentState.onchange=()=>{text('segment-status','');updateSegmentForm()};
+el('segment-form').onsubmit=e=>{e.preventDefault();void changeSegment()};
+el('segment-cancel').onclick=()=>segmentModal.close();
+segmentModal.oncancel=e=>{if(segmentBusy) e.preventDefault()};
+segmentModal.onclose=()=>{
+  if(segmentModal.open) return;
+  if(document.activeElement===document.body) el('records-heading').focus({preventScroll:true});
+  segmentSelection=null;
+};
 const absenceModal=el('absence-modal'), absenceStart=el('absence-start'), absenceEnd=el('absence-end');
 let absenceDay='', absenceRead=0, absenceSaving=false, absenceAttempt=null;
 

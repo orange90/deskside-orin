@@ -66,6 +66,13 @@ def initialize():
             CREATE INDEX IF NOT EXISTS absence_days_batch ON absence_days(batch_id);
             CREATE TABLE IF NOT EXISTS absence_requests (
                 request_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES absence_batches(batch_id));
+            CREATE TABLE IF NOT EXISTS interval_corrections (
+                id TEXT PRIMARY KEY, date TEXT NOT NULL, start REAL NOT NULL, end REAL NOT NULL,
+                state TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS correction_parts (
+                annotation_id INTEGER PRIMARY KEY REFERENCES activity_annotations(id) ON DELETE CASCADE,
+                correction_id TEXT NOT NULL REFERENCES interval_corrections(id));
+            CREATE INDEX IF NOT EXISTS correction_parts_owner ON correction_parts(correction_id);
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY, value INTEGER NOT NULL);
             INSERT OR IGNORE INTO settings VALUES ('stand_minutes', 60), ('sit_minutes', 50);
@@ -140,8 +147,15 @@ def activity_window(db, start, cutoff, as_of):
         'SELECT * FROM intervals WHERE end>? AND start<? ORDER BY start DESC', (left, right))]
     for row in rows:
         row['end'] = min(row['end'], right)
-    annotations = [dict(r) for r in db.execute(
-        'SELECT * FROM activity_annotations WHERE end>? AND start<? ORDER BY id', (left, right))]
+    annotations = []
+    for row in db.execute(
+            'SELECT a.*,p.correction_id FROM activity_annotations a '
+            'LEFT JOIN correction_parts p ON p.annotation_id=a.id WHERE a.end>? AND a.start<? ORDER BY a.id',
+            (left, right)):
+        annotation = dict(row)
+        if annotation['correction_id'] is None:
+            del annotation['correction_id']
+        annotations.append(annotation)
     result = []
     for row in bridge_posture_gaps(apply_annotations(rows, annotations)):
         row['start'], row['end'] = max(row['start'], start), min(row['end'], cutoff)

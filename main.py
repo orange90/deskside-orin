@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, StrictBool
 
 import store
 import focus_sessions
+import interval_corrections
 import model_registry
 from dashboard_data import activity_week, dashboard_snapshot, weekly_markdown
 from telemetry import monitor
@@ -479,6 +480,14 @@ class AbsenceRange(BaseModel):
     request_id: uuid.UUID | None = None
 
 
+class IntervalCorrection(BaseModel):
+    id: uuid.UUID
+    date: str
+    start: float = Field(strict=True)
+    end: float = Field(strict=True)
+    state: str
+
+
 class TodoCompletion(BaseModel):
     id: str = Field(strict=True, min_length=1)
     completed: StrictBool
@@ -622,6 +631,25 @@ def export_week(end_date: str | None = None):
         "Content-Disposition": f'attachment; filename="{filename}"',
         "Cache-Control": "no-store",
     })
+
+
+@app.post("/api/activity/corrections")
+def correct_interval(item: IntervalCorrection):
+    try:
+        return interval_corrections.create(item.id, item.date, item.start, item.end, item.state)
+    except interval_corrections.CorrectionConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/activity/corrections/{request_id}/undo")
+def undo_interval(request_id: uuid.UUID):
+    try:
+        interval_corrections.undo(request_id)
+    except KeyError:
+        raise HTTPException(404, "找不到该次时段校正") from None
+    return {"ok": True}
 
 
 @app.get("/api/absences")
