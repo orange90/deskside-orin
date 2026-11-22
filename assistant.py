@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import math
 import re
 import wave
 import os
@@ -15,6 +16,7 @@ from urllib.request import Request, build_opener, ProxyHandler
 import store
 import model_registry
 import dashboard_data
+import reminder_queue
 
 ROOT = store.ROOT
 ASR_HINT = "普通话简体中文。今天坐了多久、站立目标、久坐时长、添加待办、设置提醒。"
@@ -124,6 +126,29 @@ def idea_body(query):
     """Return the explicit capture body, keeping punctuation and internal line breaks."""
     prefix = re.match(r"^\s*(?:(?:请)?(?:记个|记下)灵感(?:\s*[：:,，、。!！]|\s+|$)|灵感\s*[:：])", query)
     return query[prefix.end():].strip() if prefix else None
+
+
+def next_reminder_answer(query, now=None, *, voice=False):
+    question = re.sub(r"[\s,，、。.!！?？]", "", query)
+    next_item = r"(?:我的?)?下(?:一|1)?(?:条|个|次)(?:定时)?提醒"
+    # Whisper small sometimes hears “是几点” as “试几点”. Only a recorded
+    # question with the full next-reminder intent may use this homophone.
+    clock = r"(?:是|试)?几点" if voice else r"是?几点"
+    detail = rf"(?:是?什么(?:内容|时候|时间)?|{clock}(?:钟)?)(?:会)?(?:响|提醒我)?"
+    if not re.fullmatch(
+            rf"(?:请问(?:一下)?)?(?:{next_item}{detail}(?:呢|啊)?"
+            rf"|(?:请)?(?:告诉我|查看|查询|帮我查(?:一下)?){next_item}"
+            r"|(?:我)?(?:还有(?:待发的)?(?:定时)?提醒吗|(?:还)?有没有(?:待发的)?(?:定时)?提醒))", question):
+        return None
+    items = reminder_queue.list_pending(now=now)['items']
+    if not items:
+        return "目前没有待发的定时提醒。"
+    item = items[0]
+    try:
+        due = datetime.fromtimestamp(math.floor(item['due']), store.TZ)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return f"下一条定时提醒是「{item['body']}」，记录的到期时间超出可显示范围。"
+    return f"下一条定时提醒是「{item['body']}」，北京时间 {due.date().isoformat()} {due:%H:%M:%S}。"
 
 
 WEEK_PERIOD = r"(?:最近|过去|近)(?:的)?(?:[7七]天|[1一](?:周|(?:个)?星期))"
@@ -423,7 +448,9 @@ def respond(query, request_id, save, voice_reply=False):
         return previous
     new_task = None
     instruction = explicit_tool(query)
-    answer = activity_answer(query) if instruction is None else None
+    answer = None
+    if instruction is None:
+        answer = next_reminder_answer(query, voice=voice_reply) or activity_answer(query)
     if answer is None:
         if instruction is None:
             answer_style = ("语音答复直接说结论。简单问题用十个字以内回答。听不清关键词时请用户重说。"
