@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#203b33">
+<title>现场姿态核验 · 桌间</title>
+<style>
+:root{--paper:#f4f5f0;--card:#fff;--ink:#253c35;--muted:#576d61;--green:#28634c;--tint:#e9f0e3;--line:#dce4d9}
+*{box-sizing:border-box}body{background:var(--paper);color:var(--ink);margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+main{max-width:920px;margin:auto;padding:28px clamp(16px,4vw,36px) 55px}
+h1,h2,h3,p,dl{margin:0}h1{font-size:clamp(27px,5vw,38px);letter-spacing:-.04em;line-height:1.2;margin:20px 0 8px}h2{font-size:20px}h3{font-size:15px}
+a,button{font:inherit;color:var(--green)}a{text-underline-offset:3px}button{cursor:pointer;border:1px solid var(--line);border-radius:10px;background:white;padding:9px 14px}
+button:hover:not(:disabled):not([aria-disabled=true]){background:#eff4eb}button:disabled,button[aria-disabled=true]{cursor:default;opacity:.55}
+:focus-visible{outline:3px solid #659b76;outline-offset:3px}[hidden]{display:none!important}
+.card{background:var(--card);border:1px solid var(--line);border-radius:17px;padding:clamp(16px,3vw,25px);margin-top:18px}
+.muted,dt,caption{color:var(--muted);font-size:13px}.label-line,.heading,.actions,.record-btn,.record-btn span{display:flex;align-items:center;gap:12px}.label-line,.heading,.record-btn{justify-content:space-between}
+#state-title{font-size:24px;font-weight:600}#state-label{font-size:13px;color:var(--muted)}
+#runtime{font-size:21px;font-weight:550;font-variant-numeric:tabular-nums;white-space:nowrap}
+#session-info{margin-top:3px}.choices{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:18px}
+.choices button{min-height:62px;font-size:18px;font-weight:550}.choices:has([hidden]){grid-template-columns:repeat(3,minmax(0,1fr))}
+.choices button[aria-pressed=true]{color:white;background:var(--green);border-color:var(--green);opacity:1}
+.actions{margin-top:12px;flex-wrap:wrap}.actions:empty{display:none}
+#status{font-size:13px;margin-top:10px}#status:empty{display:none}
+#retry{font-size:13px}.records{list-style:none;padding:0;margin:10px 0 0}.record-btn{width:100%;text-align:left;margin:3px 0;min-height:46px}
+.record-btn[aria-pressed=true]{background:var(--tint);border-color:#9db7a2}.record-btn span{font-size:13px;color:var(--muted)}
+#report{margin-top:19px;border-top:1px solid var(--line);padding-top:18px;scroll-margin-top:18px}
+#report-period{font-size:13px;color:var(--muted);margin:4px 0 12px}.score{background:var(--tint);padding:13px 16px;border-radius:12px;margin:12px 0}
+.score strong{display:block;font-size:28px;font-weight:600;font-variant-numeric:tabular-nums}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:13px 0 18px}
+.stats dd{margin:0;font-size:15px;font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;margin:10px 0 18px;text-align:left;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{padding:8px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+thead th{color:var(--muted);font-weight:500}td small{display:block;color:var(--muted)}
+caption{text-align:left;margin-bottom:5px}.explanation{font-size:13px;color:var(--muted)}
+@media(max-width:640px){.choices{grid-template-columns:repeat(2,minmax(0,1fr))}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.record-btn{flex-wrap:wrap;gap:3px 8px}.record-btn span{margin-left:auto}
+thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+tbody tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px 0;border-bottom:1px solid var(--line)}
+tbody :is(td,th){padding:0;border:0}tbody th,.no-label{grid-column:1/-1}
+td[data-label]::before{content:attr(data-label);display:block;color:var(--muted);font-size:12px}}
+</style>
+</head>
+<body>
+<main>
+<header><a href="/">← 返回活动看板</a><h1>现场姿态核验</h1><p class="muted">按实际姿态点选标签。结束后，可对照同一时段的原始模型记录。</p></header>
+<section class="card" aria-labelledby="state-title">
+  <div class="label-line"><div><p id="state-label">人工标记</p><h2 id="state-title">正在读取…</h2></div><span id="runtime" role="timer" aria-label="本次核验已用时"></span></div>
+  <p id="session-info" class="muted"></p>
+  <div class="choices" role="group" aria-label="标记实际姿态">
+    <button type="button" data-state="sit" disabled>坐姿</button><button type="button" data-state="stand" disabled>站姿</button>
+    <button type="button" data-state="away" disabled>离开</button><button type="button" data-state="pause" hidden>暂停标记</button>
+  </div>
+  <div class="actions"><button type="button" id="finish" hidden>结束并查看报告</button><button type="button" id="retry" hidden>重新连接</button></div>
+  <p id="status" role="status"></p>
+</section>
+<section class="card" aria-labelledby="records-title"><h2 id="records-title">最近核验</h2>
+  <p id="empty-records" class="muted" hidden>尚无已结束的核验。</p><ul class="records" id="records"></ul>
+  <section id="report" aria-labelledby="report-title" hidden><h2 id="report-title" tabindex="-1">核验报告</h2>
+    <p id="report-period"></p><p id="report-status" role="status"></p><button type="button" id="report-retry" hidden>重新读取报告</button>
+    <div id="report-body" hidden>
+      <div class="score"><span>本次时长一致率</span><strong id="agreement"></strong><p class="muted" id="agreement-detail"></p></div>
+      <p class="explanation">以人工标签为准，未知和未采集计入对照时长，隐私和暂停时段单列。推测与人工标签相同的时长计入一致。</p>
+      <dl id="coverage" class="stats"></dl>
+      <table><caption>各人工标签下的模型记录</caption><thead><tr><th scope="col">人工标签</th><th scope="col">模型坐姿</th><th scope="col">模型站姿</th><th scope="col">模型离开</th><th scope="col">姿态未知</th><th scope="col">未采集</th><th scope="col">隐私</th></tr></thead><tbody id="matrix"></tbody></table>
+      <h3>姿态切换</h3><dl id="transitions" class="stats"></dl>
+      <p class="explanation">切换延迟从 Orin 收到标记时起算。首次命中前遇到隐私或采集空档记为不可测。P95 仅统计命中的切换。</p>
+    </div>
+  </section>
+</section>
+</main>
+<script>
+'use strict';
+const el=id=>document.getElementById(id);
+const labels={sit:'坐姿',stand:'站姿',away:'离开',pause:'已暂停'};
+const modelLabels={sit:'模型坐姿',stand:'模型站姿',away:'模型离开',unknown:'姿态未知',missing:'未采集',privacy:'隐私'};
+const buttons=[...document.querySelectorAll('[data-state]')];
+const when=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+const timestamp=t=>when.format(t*1000);
+const setText=(id,value)=>{const node=el(id);if(node.textContent!==value)node.textContent=value};
+function make(tag,value){const n=document.createElement(tag);if(value!==undefined)n.textContent=value;return n}
+function duration(value){
+  if(value>0 && value<0.001) return '不足 1 毫秒';
+  const ms=Math.round(value*1000), h=Math.floor(ms/3600000), m=Math.floor(ms%3600000/60000), s=ms%60000/1000;
+  return [h&&h+' 时',m&&m+' 分',s&&s+' 秒'].filter(Boolean).join(' ') || '0 秒';
+}
+async function api(path,body){
+  const options={cache:'no-store',signal:AbortSignal.timeout(20000)};
+  if(body!==undefined) Object.assign(options,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const res=await fetch('/api/field-trials'+path,options), result=await res.json();
+  if(!res.ok) throw Object.assign(Error(typeof result.detail==='string'?result.detail:'核验请求失败'),{status:res.status});
+  return result;
+}
+function uuid(){
+  if(crypto.randomUUID) return crypto.randomUUID();
+  const b=crypto.getRandomValues(new Uint8Array(16)); b[6]=(b[6]&15)|64; b[8]=(b[8]&63)|128;
+  const hex=[...b].map(v=>v.toString(16).padStart(2,'0')).join('');
+  return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+}
+const attemptKey='deskside-field-trial-request';
+let attempt=null;
+try{attempt=JSON.parse(sessionStorage.getItem(attemptKey))}catch{}
+function remember(value){
+  attempt=value;
+  try{if(value)sessionStorage.setItem(attemptKey,JSON.stringify(value));else sessionStorage.removeItem(attemptKey)}catch{}
+}
+let snapshot=null, online=false, writing=false, reading=false, readVersion=0, clockAt=0, checkedDeadline=null;
+let selectedReport=null, reportVersion=0, historyKey='', notice='';
+function serverNow(){return snapshot.server_now+(performance.now()-clockAt)/1000}
+function expired(){return !!snapshot?.active && serverNow()>=snapshot.active.deadline}
+function renderControls(){
+  const active=snapshot?.active, blocked=!online || writing || expired();
+  setText('state-label',active?(online?'当前人工标记':'上次同步的人工标记'):'人工标记');
+  setText('state-title',active?labels[active.current_state]:snapshot?(online?'从当前姿态开始':'上次同步时没有进行中的核验'):'等待读取状态');
+  setText('session-info',active?'北京时间 '+timestamp(active.started_at)+' 开始 · '+timestamp(active.deadline)+' 自动结束':
+    '选择实际姿态即可开始，每次最长 2 小时。');
+  for(const btn of buttons){
+    const picked=active?.current_state===btn.dataset.state;
+    btn.hidden=btn.dataset.state==='pause' && !active; btn.disabled=!snapshot;
+    btn.setAttribute('aria-disabled',String(blocked || picked));btn.setAttribute('aria-pressed',String(picked));
+  }
+  el('finish').hidden=!active; el('finish').setAttribute('aria-disabled',String(blocked));
+  el('retry').hidden=online || writing;
+  const offline=!online && !writing?'连接中断。重连后请按当时的姿态继续。':'';
+  setText('status',[notice,offline].filter(Boolean).join(' '));
+  drawClock();
+}
+function drawClock(){
+  const active=snapshot?.active;
+  if(!active){setText('runtime','');return}
+  const seconds=Math.max(0,Math.floor(Math.min(active.deadline,serverNow())-active.started_at));
+  setText('runtime',[Math.floor(seconds/3600),Math.floor(seconds%3600/60),seconds%60].map(n=>String(n).padStart(2,'0')).join(':'));
+}
+function tick(){
+  drawClock();
+  const active=snapshot?.active;
+  if(expired() && checkedDeadline!==active.id && online && !writing){
+    checkedDeadline=active.id;notice='已到时限，正在核对结束状态。';
+    renderControls(); void sync();
+  }
+}
+function renderRecords(){
+  const rows=snapshot?.recent || [],signature=JSON.stringify(rows);
+  if(signature!==historyKey){
+    historyKey=signature;
+    const list=el('records'), focused=document.activeElement?.dataset.report;
+    list.replaceChildren(...rows.map(row=>{
+      const li=make('li'), button=make('button',timestamp(row.started_at)+' 开始');
+      button.type='button';button.className='record-btn';button.dataset.report=row.id;
+      button.append(make('span',duration(Math.round(row.ended_at-row.started_at))+' · 查看报告'));
+      button.onclick=()=>openReport(row);li.append(button);return li;
+    }));
+    if(focused) [...list.querySelectorAll('button')].find(b=>b.dataset.report===focused)?.focus({preventScroll:true});
+    el('empty-records').hidden=rows.length>0;
+  }
+  for(const button of el('records').querySelectorAll('button'))button.setAttribute('aria-pressed',String(button.dataset.report===selectedReport));
+}
+async function sync(afterWrite=false){
+  if(reading || (writing && !afterWrite))return;
+  const version=++readVersion;
+  reading=true;
+  try{
+    const next=await api('');
+    if(version!==readVersion)return;
+    if(!Array.isArray(next.recent) || !Number.isFinite(next.server_now))throw Error('无效的核验状态');
+    const previous=snapshot?.active?.id;
+    snapshot=next;clockAt=performance.now();online=true;
+    if(previous && !next.active && checkedDeadline===previous) notice='核验已结束。';
+    if(attempt && (next.active?.id===attempt.id || next.recent.some(r=>r.id===attempt.id)))remember(null);
+    renderRecords();
+  }catch(error){if(version===readVersion)online=false}
+  finally{if(version===readVersion){reading=false;renderControls()}}
+}
+async function writeState(state){
+  const active=snapshot?.active;
+  if(!online || writing || expired() || (!active && (state==='pause' || state==='finish')) || active?.current_state===state)return;
+  const finish=state==='finish';
+  const key=JSON.stringify([active?.id||'start',active?.current_state,active?.marked_at??snapshot.recent[0]?.id??null,state]);
+  if(!finish && attempt?.key!==key)remember({key,id:uuid()});
+  const body=finish?{}:{id:attempt.id,state};
+  const path=active?'/'+encodeURIComponent(active.id)+(finish?'/finish':'/marks'):'';
+  let ended=null, acknowledged=false;const reportAtWrite=reportVersion;
+  writing=true;readVersion++;reading=false;notice='正在向 Orin 提交…';renderControls();
+  try{
+    const row=await api(path,body);
+    acknowledged=true;
+    remember(null); notice='';
+    if(row.ended_at==null)snapshot.active=row;
+    else{
+      ended=row;
+      if(snapshot.active?.id===row.id)snapshot.active=null;
+      snapshot.recent=[row,...snapshot.recent.filter(r=>r.id!==row.id)].slice(0,5);
+      renderRecords();
+    }
+  }catch(error){
+    notice=error.status?error.message:'未收到操作结果，请核对当前标记。';
+  }finally{
+    if(!acknowledged)await sync(true);
+    writing=false;renderControls();
+    if(acknowledged)void sync();
+  }
+  if(finish && !ended && online)ended=snapshot.recent.find(r=>r.id===active.id);
+  if(ended && reportVersion===reportAtWrite)void openReport(ended);
+}
+for(const button of buttons)button.onclick=()=>writeState(button.dataset.state);
+el('finish').onclick=()=>writeState('finish');
+el('retry').onclick=()=>sync();
+function stats(id,entries){
+  el(id).replaceChildren(...entries.map(([label,value])=>{
+    const div=make('div');div.append(make('dt',label),make('dd',value));return div;
+  }));
+}
+function renderReport(metrics){
+  const m=metrics, t=m.transitions;
+  setText('agreement',m.eligible_seconds>0?(100*m.matched_seconds/m.eligible_seconds).toFixed(1)+'%':'暂无可计入时长');
+  setText('agreement-detail','一致 '+duration(m.matched_seconds)+' / 计入对照 '+duration(m.eligible_seconds));
+  const sum=key=>Object.values(m.matrix).reduce((total,row)=>total+(row[key]||0),0);
+  stats('coverage',Object.entries({'人工标记':m.labeled_seconds,'推测':m.estimated_seconds,'其中推测一致':m.matched_estimated_seconds,
+    '姿态未知':sum('unknown'),'未采集':sum('missing'),'隐私保护':sum('privacy'),'人工暂停':m.paused_seconds,'首次标记前':m.unlabeled_seconds})
+    .map(([label,seconds])=>[label,duration(seconds)]));
+  el('matrix').replaceChildren(...['sit','stand','away'].map(state=>{
+    const row=make('tr'), head=make('th',labels[state]);head.scope='row';row.append(head);
+    const cells=m.matrix[state];
+    if(!Object.values(cells).some(s=>s>0)){
+      const empty=make('td','本次未标记此状态');empty.colSpan=6;empty.className='no-label';row.append(empty);return row;
+    }
+    for(const [key,label] of Object.entries(modelLabels)){
+      const cell=make('td',duration(cells[key]||0));cell.dataset.label=label;
+      const estimated=m.estimated_matrix[state]?.[key];
+      if(estimated>0)cell.append(make('small','含推测 '+duration(estimated)));
+      row.append(cell);
+    }
+    return row;
+  }));
+  stats('transitions',[['总切换',t.total+' 次'],['命中',t.measured+' 次'],['其中推测命中',t.estimated_hits+' 次'],
+    ['未命中',t.missed+' 次'],['不可测',t.unmeasurable+' 次'],['命中延迟 P95',t.p95_seconds==null?'无命中样本':duration(t.p95_seconds)]]);
+}
+async function openReport(row){
+  const version=++reportVersion;selectedReport=row.id;renderRecords();
+  el('report').hidden=false;el('report-body').hidden=true;el('report-retry').hidden=true;
+  setText('report-period','北京时间 '+timestamp(row.started_at)+' 至 '+timestamp(row.ended_at));
+  setText('report-status','正在读取报告…');
+  el('report-title').focus({preventScroll:true});el('report').scrollIntoView({block:'start'});
+  try{
+    const report=await api('/'+encodeURIComponent(row.id)+'/report');
+    if(version!==reportVersion)return;
+    if(report.session.id!==row.id)throw Error('报告场次不符');
+    renderReport(report.metrics);el('report-body').hidden=false;setText('report-status','');
+  }catch(error){
+    if(version!==reportVersion)return;
+    setText('report-status','报告暂时无法读取。');el('report-retry').hidden=false;
+  }
+  el('report-retry').onclick=()=>openReport(row);
+}
+void sync();
+setInterval(()=>{if(!document.hidden)void sync()},15000);
+setInterval(()=>{if(!document.hidden && snapshot?.active)tick()},1000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)void sync()});
+</script>
+</body></html>

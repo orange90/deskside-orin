@@ -57,7 +57,9 @@ def main_test():
         worker.start()
         try:
             wait_for(lambda: json.loads(request("/api/state")), 8)
-            assert 'id="voice"' in request("/").decode()
+            dashboard = request("/").decode()
+            assert 'id="voice"' in dashboard and 'href="/field-trial"' in dashboard
+            assert 'data-state="sit"' in request("/field-trial").decode()
             now = time.time()
             store.persist("person", "sit", now - 120, False)
             store.persist("person", "sit", now, True)

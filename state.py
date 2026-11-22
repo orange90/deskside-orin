@@ -3,6 +3,12 @@ from dataclasses import dataclass
 from statistics import median
 
 
+POSE_METHODS = frozenset({
+    "keypoints", "motion", "cosmos", "multiple_people", "estimate_recent",
+    "estimate_session", "estimate_pending", "estimate_joints", "estimate_default", "unknown",
+})
+
+
 @dataclass
 class FrameLight:
     paused: bool = False

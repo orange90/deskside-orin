@@ -134,7 +134,7 @@ def run():
             accumulated = defaultdict(float)
             for row in rows:
                 seconds = max(0,min(phase['end'],row['end'])-max(phase['start'],row['start']))
-                if seconds and row['kind'] in {'presence','person'}:
+                if seconds and row['kind'] in {'presence','person','pose_method'}:
                     accumulated[row['kind']+'/'+row['state']] += seconds
             events = phase['transitions']
             first_match = next((e['t'] for e in events if e['state_presence_source'][0] == phase['expected']), None)

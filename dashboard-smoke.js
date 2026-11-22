@@ -2,11 +2,32 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const controls=new Map(),requests=[],storage=new Map();
 class Node {constructor(){this.value='';this.checked=false;this.textContent='';this.hidden=false;this.style={};this.children=[];this.classList={toggle(){}};this.dataset={};}append(...nodes){this.children.push(...nodes)}replaceChildren(...nodes){this.children=nodes}setAttribute(k,v){this[k]=v}removeAttribute(k){delete this[k]}addEventListener(){}querySelector(){return null}getContext(){return {clearRect(){}}}showModal(){}close(){}}
+// Only data-attribute selectors are needed by the simulated inbox controls.
+Node.prototype.querySelectorAll = function(selector) {
+  const attribute = selector.match(/\[data-([a-z-]+)\]/);
+  if (!attribute) return [];
+  const key = attribute[1].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+  const matches = [];
+  for (const child of this.children) {
+    if (child.dataset?.[key] !== undefined) matches.push(child);
+    if (child.querySelectorAll) matches.push(...child.querySelectorAll(selector));
+  }
+  return matches;
+};
 const el=id=>{if(!controls.has(id))controls.set(id,new Node());return controls.get(id)};
 const start=Date.parse('2026-11-11T00:00:00+08:00')/1000;
 const fixture={date:'2026-11-11',today:'2026-11-11',first_date:'2026-11-10',start,end:start+86400,cutoff:start+3600,as_of:start+3600,totals:{sit:120},settings:{sit_minutes:50,stand_minutes:60},intervals:[],notes:[{kind:'reminder',body:'本地文字提醒',start,end:start,count:1}],active_reminders:[],tasks:[],camera:{ready:true,person:'sit',presence:'present',fps:6},hourly:Array.from({length:24},(_,hour)=>({hour,sit:0,stand:0,away:0,unknown:0,privacy:0}))};
 const replies={'/api/dashboard':fixture,'/api/hardware':{latest:null,history:[]},'/api/models':{components:[{id:'asr',model:'Whisper small'}]},'/api/voice/start':{},'/api/voice/stop':{query:'今天坐了多久',answer:'今天坐了 2 分钟'}};
-const context=vm.createContext({AbortSignal,document:{getElementById:el,createElement:()=>new Node(),createElementNS:()=>new Node(),createTextNode:text=>({textContent:text}),querySelectorAll:()=>[],querySelector:el,addEventListener(){},hidden:false},localStorage:{getItem:key=>storage.get(key),setItem:(k,v)=>storage.set(k,v)},setInterval(){},setTimeout(){},clearTimeout(){},crypto:{randomUUID:()=> 'fixture'},fetch:async(path,options)=>{requests.push({path,body:options.body?JSON.parse(options.body):null});return{ok:true,json:async()=>replies[path.split('?')[0]]}},console});
+const inboxTabs = ['open', 'done', 'reminders'].map(view => {
+  const tab = new Node();
+  tab.dataset.inbox = view;
+  return tab;
+});
+const todo = {id:'legacy / 1', body:'核对周报', completed:false};
+replies['/api/todos'] = {items:[todo], next_cursor:null};
+replies['/api/focus'] = {active:null, recent:[], server_now:start};
+replies['/api/todos/completion'] = {...todo, completed:true};
+const context=vm.createContext({AbortSignal,performance,document:{getElementById:el,createElement:()=>new Node(),createElementNS:()=>new Node(),createTextNode:text=>({textContent:text}),querySelectorAll:selector=>selector==='[data-inbox]'?inboxTabs:[],querySelector:el,addEventListener(){},hidden:false},localStorage:{getItem:key=>storage.get(key),setItem:(k,v)=>storage.set(k,v)},setInterval(){},setTimeout(){},clearTimeout(){},crypto:{randomUUID:()=> 'fixture'},fetch:async(path,options)=>{requests.push({path,body:options.body?JSON.parse(options.body):null});return{ok:true,json:async()=>replies[path.split('?')[0]]}},console});
 const html=fs.readFileSync(0,'utf8');vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
 (async()=>{await new Promise(setImmediate);await el('voice').onclick();await el('voice').onclick();await new Promise(setImmediate);
 assert.deepEqual(requests.filter(x=>x.path.startsWith('/api/voice/')), [{path:'/api/voice/start',body:{}},{path:'/api/voice/stop',body:{id:'fixture',save:false}}]);assert.match(el('feedback').textContent,/识别到：今天坐了多久\n本机回复：今天坐了 2 分钟/);assert.match(el('reminder-notes').children[0].textContent,/本地文字提醒/);
@@ -42,4 +63,61 @@ assert.equal(el('connection').textContent,'连接中断');assert.equal(el('live-
 context.fetch=workingFetch;fixture.date=fixture.today;
 el('today').onclick(); await new Promise(setImmediate);
 assert.equal(el('day').value,'2026-11-12');assert.match(el('connection').textContent,/已连接/);
-console.log('Dashboard voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});
+assert.equal(el('focus-form').hidden,false);
+replies['/api/focus'] = {active:{id:'active', title:'写初稿', minutes:25, due_at:start+1500},
+                         recent:[], server_now:start};
+await vm.runInContext('syncFocus()',context);
+assert.equal(el('focus-name').textContent,'写初稿');
+assert.equal(el('focus-clock').textContent,'25:00');
+assert.equal(el('focus-form').hidden,true);
+const taskBox = () => el('tasks').children[0].children[0].children[0];
+assert.equal(taskBox().dataset.taskId, todo.id);
+assert.equal(taskBox().checked, false);
+replies['/api/todos'] = {items:[], next_cursor:null};
+await taskBox().onchange();
+await new Promise(setImmediate);
+assert.deepEqual(requests.find(r=>r.path==='/api/todos/completion').body, {id:todo.id, completed:true});
+assert.match(el('tasks').children[0].textContent,/没有待处理/);
+replies['/api/todos'] = {items:[{...todo, completed:true}], next_cursor:null};
+inboxTabs[1].onclick();
+await new Promise(setImmediate);
+assert.equal(taskBox().checked, true);
+assert.ok(requests.some(r=>r.path==='/api/todos?completed=true'));
+assert.ok(!requests.some(r => r.path.startsWith('/api/reminders/pending')));
+const reminder = {id:'old / 1', body:'记得核对', due:start+600};
+replies['/api/reminders/pending'] = {items:[reminder], next_cursor:null, server_now:start};
+inboxTabs[2].onclick();
+await new Promise(setImmediate);
+const actions = () => el('tasks').querySelectorAll('[data-reminder-action]');
+assert.deepEqual(actions().map(button=>button.dataset.reminderAction), ['snooze','cancel']);
+actions().find(button=>button.dataset.reminderAction==='cancel').onclick();
+assert.deepEqual(actions().map(button=>button.dataset.reminderAction), ['confirm','keep']);
+replies['/api/reminders/manage'] = {id:reminder.id, action:'cancel', due:reminder.due};
+replies['/api/reminders/pending'] = {items:[], next_cursor:null, server_now:start};
+actions().find(button=>button.dataset.reminderAction==='confirm').onclick();
+await new Promise(setImmediate);
+assert.deepEqual(requests.find(r=>r.path==='/api/reminders/manage').body,
+  {id:reminder.id, request_id:'fixture', action:'cancel', expected_due:reminder.due});
+assert.match(el('tasks').children[0].textContent,/没有待发提醒/);
+let requestSequence=0, dropReply=true;
+context.crypto.randomUUID=()=>String(++requestSequence);
+const sentCommands=[];
+context.fetch=async (path,options)=>{
+  if(path!=='/api/query') return workingFetch(path,options);
+  sentCommands.push(JSON.parse(options.body));
+  if(dropReply){dropReply=false;throw Error('lost response')}
+  return {ok:true,json:async()=>({answer:'已添加待办，整理书桌。'})};
+};
+el('query').value='添加待办。整理书桌。';
+el('question').onsubmit({preventDefault(){}});
+await new Promise(setImmediate);
+el('query').value='添加待办，整理书桌';
+el('question').onsubmit({preventDefault(){}});
+await new Promise(setImmediate);
+el('question').onsubmit({preventDefault(){}});
+await new Promise(setImmediate);
+assert.equal(sentCommands.length,3);
+assert.equal(sentCommands[0].id,sentCommands[1].id);
+assert.notEqual(sentCommands[1].id,sentCommands[2].id);
+assert.equal(sentCommands[1].text,'添加待办，整理书桌');
+console.log('Dashboard reminders, focus, todo, voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});
