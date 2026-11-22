@@ -223,33 +223,41 @@ def task(request_id, kind, body, minutes=None):
         return _insert_task(db, request_id, kind, body, minutes)
 
 
-def _saved_reply(db, request_id, prefix):
+_QUESTION_PREFIX = "你："
+_ANSWER_PREFIX = "\n助手："
+
+
+def _saved_reply(db, request_id, query, equivalent):
     row = db.execute(
         "SELECT body,reply_offset FROM saved_replies JOIN notes ON notes.id=note_id WHERE request_id=?",
         (request_id,)).fetchone()
     if row is None:
         return None
-    if row['body'][:row['reply_offset']] != prefix:
+    prefix = row['body'][:row['reply_offset']]
+    if not prefix.startswith(_QUESTION_PREFIX) or not prefix.endswith(_ANSWER_PREFIX):
+        raise ValueError("保存的对话格式无效")
+    original = prefix[len(_QUESTION_PREFIX):-len(_ANSWER_PREFIX)]
+    if original != query and (equivalent is None or not equivalent(original, query)):
         raise ValueError("该请求编号已用于其他问题")
     return row['body'][row['reply_offset']:]
 
 
-def previous_answer(request_id, query):
+def previous_answer(request_id, query, equivalent=None):
     with database() as db:
-        return _saved_reply(db, request_id, f"你：{query}\n助手：")
+        return _saved_reply(db, request_id, query, equivalent)
 
 
-def record_answer(request_id, query, answer, save, new_task):
+def record_answer(request_id, query, answer, save, new_task, equivalent=None):
     if not save:
         if new_task:
             task(request_id, **new_task)
         return answer
     # A confirmed draft can be retried after a lost HTTP response. Store the
     # task and the opted-in dialogue together. Keep just one copy of the text.
-    prefix = f"你：{query}\n助手："
+    prefix = f"{_QUESTION_PREFIX}{query}{_ANSWER_PREFIX}"
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
-        previous = _saved_reply(db, request_id, prefix)
+        previous = _saved_reply(db, request_id, query, equivalent)
         if previous is not None:
             return previous
         if new_task:

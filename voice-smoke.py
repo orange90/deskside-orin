@@ -4,8 +4,10 @@ from pathlib import Path
 import tempfile
 import time
 import wave
+from unittest.mock import patch
 
 from assistant import Voice
+import model_registry
 import store
 
 ROOT = Path(__file__).resolve().parent
@@ -20,8 +22,11 @@ class FinishedRecording:
 
 
 def main():
-    with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="orin-voice-smoke-") as fixture_db:
-        store.ROOT = Path(fixture_db)
+    model = model_registry.asr_path()
+    # Only the activity and task database lives in the disposable directory.
+    with (tempfile.TemporaryDirectory(dir="/dev/shm", prefix="orin-voice-smoke-") as fixture_db,
+          patch.object(store, "ROOT", Path(fixture_db)),
+          patch.object(model_registry, "asr_path", return_value=model)):
         store.initialize()
         now = time.time()
         store.persist("person", "sit", now - 120, False)

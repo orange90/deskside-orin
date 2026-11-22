@@ -99,4 +99,25 @@ await new Promise(setImmediate);
 assert.deepEqual(requests.find(r=>r.path==='/api/reminders/manage').body,
   {id:reminder.id, request_id:'fixture', action:'cancel', expected_due:reminder.due});
 assert.match(el('tasks').children[0].textContent,/没有待发提醒/);
+let requestSequence=0, dropReply=true;
+context.crypto.randomUUID=()=>String(++requestSequence);
+const sentCommands=[];
+context.fetch=async (path,options)=>{
+  if(path!=='/api/query') return workingFetch(path,options);
+  sentCommands.push(JSON.parse(options.body));
+  if(dropReply){dropReply=false;throw Error('lost response')}
+  return {ok:true,json:async()=>({answer:'已添加待办，整理书桌。'})};
+};
+el('query').value='添加待办。整理书桌。';
+el('question').onsubmit({preventDefault(){}});
+await new Promise(setImmediate);
+el('query').value='添加待办，整理书桌';
+el('question').onsubmit({preventDefault(){}});
+await new Promise(setImmediate);
+el('question').onsubmit({preventDefault(){}});
+await new Promise(setImmediate);
+assert.equal(sentCommands.length,3);
+assert.equal(sentCommands[0].id,sentCommands[1].id);
+assert.notEqual(sentCommands[1].id,sentCommands[2].id);
+assert.equal(sentCommands[1].text,'添加待办，整理书桌');
 console.log('Dashboard reminders, focus, todo, voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});

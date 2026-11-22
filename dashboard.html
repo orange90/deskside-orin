@@ -1128,17 +1128,56 @@ function changeDay(delta){if(!el('day').value)return;followToday=false;const d=n
 el('previous').onclick=()=>changeDay(-1);el('next').onclick=()=>changeDay(1);el('today').onclick=()=>{followToday=true;el('day').value='';refresh()};el('day').onchange=()=>{followToday=!el('day').value;intervalLimit=20;noteLimit=12;refresh()};
 document.querySelectorAll('[data-kind]').forEach(b=>b.onclick=()=>{selectedKind=b.dataset.kind;intervalLimit=20;document.querySelectorAll('[data-kind]').forEach(x=>x.classList.toggle('active',x===b));if(data)renderIntervals()});document.querySelectorAll('[data-note]').forEach(b=>b.onclick=()=>{selectedNote=b.dataset.note;noteLimit=12;document.querySelectorAll('[data-note]').forEach(x=>x.classList.toggle('active',x===b));if(data)renderNotes()});el('more-intervals').onclick=()=>{intervalLimit+=30;renderIntervals()};el('more-notes').onclick=()=>{noteLimit+=20;renderNotes()};
 async function action(fn){try{await fn();await refresh()}catch(e){text('feedback',e.message);notify(e.message)}}
-el('question').onsubmit=e=>{e.preventDefault();action(async()=>{el('send').disabled=true;text('feedback','正在本机生成答复…');try{const r=await queryWithTaskId('/api/query',{text:el('query').value,save:el('save').checked});text('feedback',r.answer)}finally{el('send').disabled=false}})};
+// Only explicit command boundaries may vary on retry. Ordinary questions and
+// punctuation inside a task retain their literal text.
+const queryAttempts=new Map();
+function queryRetryKey(raw){
+  const text=raw.trim();
+  if(!/[\r\n\uFEFF]/u.test(raw)){
+    const task=/^(请?(?:添加|新增)(?:一个|一条)?待办(?:事项)?)[：:,，、。 \t\u3000]*(.+)$/u.exec(text);
+    const command=task || /^(请?(?:[0-9]{1,4}|[一二两三四五六七八九]?十[一二两三四五六七八九]?|[一二两三四五六七八九])[ \t\u3000]*(?:分钟|小时)后)[，, \t\u3000]*提醒[，, \t\u3000]*我[：:,， \t\u3000]*(.+)$/u.exec(text);
+    if(command){
+      const original=command[2].trim(), body=original.replace(/[。！？!?]+$/u,'').trim();
+      if(body && Array.from(original).length<=300) return JSON.stringify([command[1],body]);
+    }
+  }
+  return JSON.stringify([raw]);
+}
+async function submitQuery(channel,query,save){
+  const key=queryRetryKey(query);
+  let attempt=queryAttempts.get(channel);
+  if(attempt?.key!==key){
+    attempt={key,id:crypto.randomUUID()};
+    queryAttempts.set(channel,attempt);
+  }
+  const reply=await queryWithTaskId('/api/query',{text:query,save},attempt.id,60000);
+  queryAttempts.delete(channel);
+  return reply;
+}
+el('question').onsubmit=e=>{
+  e.preventDefault();
+  if(el('send').disabled) return;
+  action(async()=>{
+    el('send').disabled=true; text('feedback','正在本机生成答复…');
+    try{
+      const reply=await submitQuery('typed',el('query').value,el('save').checked);
+      text('feedback',reply.answer);
+    }catch(error){
+      if(!error.status) throw Error('未收到本机答复，可用原文重试。');
+      throw error;
+    }finally{el('send').disabled=false}
+  });
+};
 const reviewVoice=el('voice-review'), draftDialog=el('voice-draft'), draftText=el('voice-draft-text');
-let reviewThisRecording=false, draftSending=false, draftAttempt=null;
+let reviewThisRecording=false, draftSending=false;
 try{reviewVoice.checked=localStorage.getItem('deskside-voice-review')==='yes'}catch{}
 reviewVoice.onchange=()=>{
   try{localStorage.setItem('deskside-voice-review',reviewVoice.checked?'yes':'no')}catch{}
 };
 function updateDraftControls(){
-  const length=Array.from(draftText.value.trim()).length;
+  const length=Array.from(draftText.value).length;
   text('voice-draft-count',length>500?'请精简到 500 字以内 · 当前 '+length+' 字':length+' / 500 字');
-  el('voice-draft-send').disabled=draftSending || !length || length>500;
+  el('voice-draft-send').disabled=draftSending || !draftText.value.trim() || length>500;
   el('voice-draft-discard').disabled=el('voice-draft-save').disabled=draftSending;
   draftText.readOnly=draftSending;
 }
@@ -1146,7 +1185,7 @@ function openVoiceDraft(query){
   draftText.value=query;
   el('voice-draft-save').checked=el('save').checked;
   text('voice-draft-status','');
-  draftAttempt=null;
+  queryAttempts.delete('draft');
   updateDraftControls();
   draftDialog.showModal();
 }
@@ -1159,7 +1198,7 @@ draftText.oninput=updateDraftControls;
 el('voice-draft-discard').onclick=discardVoiceDraft;
 draftDialog.oncancel=e=>{e.preventDefault();discardVoiceDraft()};
 draftDialog.onclose=()=>{
-  draftText.value=''; draftAttempt=null; text('voice-draft-status','');
+  draftText.value=''; queryAttempts.delete('draft'); text('voice-draft-status','');
   el('voice').focus({preventScroll:true});
 };
 el('voice-draft-form').onsubmit=async e=>{
@@ -1167,12 +1206,11 @@ el('voice-draft-form').onsubmit=async e=>{
   if(!draftDialog.open || draftSending) return;
   updateDraftControls();
   if(el('voice-draft-send').disabled) return;
-  const query=draftText.value.trim(), save=el('voice-draft-save').checked;
-  if(draftAttempt?.query!==query) draftAttempt={id:crypto.randomUUID(),query};
+  const query=draftText.value, save=el('voice-draft-save').checked;
   draftSending=true; updateDraftControls();
   text('voice-draft-status','正在等待本机答复…');
   try{
-    const reply=await queryWithTaskId('/api/query',{text:query,save},draftAttempt.id,60000);
+    const reply=await submitQuery('draft',query,save);
     el('save').checked=save;
     text('feedback','已发送：'+query+'\n本机回复：'+reply.answer);
     draftDialog.close();

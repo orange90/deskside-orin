@@ -262,9 +262,37 @@ def activity_answer(query, now=None):
     return prefix + "，".join(answers) + "。"
 
 
+def _command_parts(instruction):
+    action, body = instruction.get("action"), instruction.get("body")
+    if not isinstance(body, str) or not 0 < len(body.strip()) <= 300:
+        raise ValueError("模型返回内容无效")
+    body = body.strip()
+    if action == "answer":
+        return action, body, None
+    if action not in ("todo", "reminder"):
+        raise ValueError("模型请求了未知操作")
+    body = body.rstrip("。！？!?").strip()
+    if not body:
+        raise ValueError("待办内容不能为空" if action == "todo" else "提醒内容不能为空")
+    minutes = instruction.get("minutes") if action == "reminder" else None
+    if action == "reminder" and (type(minutes) is not int or not 1 <= minutes <= 1440):
+        raise ValueError("请提供 1 到 1440 分钟内的提醒时间")
+    return action, body, minutes
+
+
+def _same_explicit_command(original, query):
+    first, second = explicit_tool(original), explicit_tool(query)
+    if first is None or second is None:
+        return False
+    try:
+        return _command_parts(first) == _command_parts(second)
+    except ValueError:
+        return False
+
+
 def respond(query, request_id, save, voice_reply=False):
     if save:
-        previous = store.previous_answer(request_id, query)
+        previous = store.previous_answer(request_id, query, _same_explicit_command)
         if previous is not None:
             return previous
     new_task = None
@@ -287,30 +315,16 @@ def respond(query, request_id, save, voice_reply=False):
                     {"role": "user", "content": query}]
             }, 20)
             instruction = json.loads(result)
-        action, body = instruction.get("action"), instruction.get("body")
-        if not isinstance(body, str) or not 0 < len(body.strip()) <= 300:
-            raise ValueError("模型返回内容无效")
-        body = body.strip()
+        action, body, minutes = _command_parts(instruction)
         if action == "answer":
             answer = body
         elif action == "todo":
-            body = body.rstrip("。！？!?").strip()
-            if not body:
-                raise ValueError("待办内容不能为空")
             new_task = {"kind": action, "body": body}
             answer = f"已添加待办，{body}。"
-        elif action == "reminder":
-            body = body.rstrip("。！？!?").strip()
-            if not body:
-                raise ValueError("提醒内容不能为空")
-            minutes = instruction.get("minutes")
-            if type(minutes) is not int or not 1 <= minutes <= 1440:
-                raise ValueError("请提供 1 到 1440 分钟内的提醒时间")
+        else:
             new_task = {"kind": action, "body": body, "minutes": minutes}
             answer = f"已设置 {minutes} 分钟后的提醒，{body}。"
-        else:
-            raise ValueError("模型请求了未知操作")
-    return store.record_answer(request_id, query, answer, save, new_task)
+    return store.record_answer(request_id, query, answer, save, new_task, _same_explicit_command)
 
 
 class Voice:
