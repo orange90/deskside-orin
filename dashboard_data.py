@@ -2,6 +2,7 @@
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 import store
+from idea_search import END_IDEA_AT, MIN_IDEA_AT, beijing_day
 from posture_continuity import MAX_GAP_SECONDS
 
 
@@ -61,7 +62,7 @@ def group_notes(rows, intervals):
         while cursor < len(person) and person[cursor]['end'] < row['at']:
             cursor += 1
         segment = cursor if cursor >= len(person) or row['at'] < person[cursor]['start'] else None
-        body = row['body'].strip()
+        body = row['body'] if row['kind'] == 'idea' else row['body'].strip()
         if (groups and row['kind'] == 'cosmos' and groups[-1]['kind'] == 'cosmos'
                 and groups[-1]['body'] == body and segment is not None
                 and groups[-1]['segment'] == segment and 0 <= row['at'] - groups[-1]['end'] <= 600):
@@ -70,6 +71,8 @@ def group_notes(rows, intervals):
         else:
             groups.append({'kind': row['kind'], 'body': body, 'start': row['at'],
                            'end': row['at'], 'count': 1, 'segment': segment})
+            if row['kind'] == 'idea':
+                groups[-1]['idea_id'] = str(row['id'])
     for group in groups:
         del group['segment']
     return list(reversed(groups))
@@ -88,7 +91,9 @@ def dashboard_snapshot(day=None, now=None):
             'SELECT * FROM notes WHERE at>=? AND at<? ORDER BY at,id', (start, cutoff))]
         first = db.execute("SELECT min(day_start) FROM ("
                            "SELECT min(start) AS day_start FROM intervals WHERE kind!='pose_method' "
-                           "UNION ALL SELECT min(at) FROM notes WHERE kind='idea')").fetchone()[0]
+                           "UNION ALL SELECT min(at) FROM notes WHERE kind='idea' AND at>=? AND at<? "
+                           "AND typeof(at) IN ('integer','real'))",
+                           (MIN_IDEA_AT, min(END_IDEA_AT, now.timestamp()))).fetchone()[0]
         settings = dict(db.execute('SELECT key,value FROM settings'))
         today_start = datetime.combine(now.date(), time.min, store.TZ).timestamp()
         reminders = [dict(r) for r in db.execute(
@@ -105,7 +110,7 @@ def dashboard_snapshot(day=None, now=None):
                 hourly[h][r['state']] = hourly[h].get(r['state'], 0) + overlap
     return {'date': chosen.isoformat(), 'today': now.date().isoformat(), 'start': start, 'end': end,
             'as_of': now.timestamp(), 'cutoff': cutoff,
-            'first_date': datetime.fromtimestamp(first, store.TZ).date().isoformat() if first else chosen.isoformat(),
+            'first_date': beijing_day(first) if first is not None else chosen.isoformat(),
             'totals': totals, 'hourly': hourly, 'intervals': rows,
             'continuity': {'max_gap_seconds': MAX_GAP_SECONDS, 'inferred_seconds': inferred_seconds},
             'annotations': annotations, 'notes': group_notes(notes, rows), 'raw_note_count': len(notes), 'active_reminders': reminders, 'settings': settings, 'tasks': tasks}

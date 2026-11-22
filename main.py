@@ -14,13 +14,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import store
 import focus_sessions
 import focus_handoffs
+from idea_search import search_ideas
 import field_trials
 import privacy_pause
 import reminder_queue
@@ -647,6 +648,11 @@ class HandoffContent(BaseModel):
     body: str = Field(strict=True, min_length=1, max_length=500)
 
 
+class IdeaSearch(BaseModel):
+    query: str = Field(strict=True, min_length=1)
+    before: str | None = Field(default=None, strict=True, max_length=512)
+
+
 class ResumeHandoff(BaseModel):
     id: uuid.UUID
 
@@ -942,6 +948,14 @@ def export_ideas(date: str):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     return markdown_download(filename, document)
+
+
+@app.post("/api/ideas/search")
+def find_ideas(item: IdeaSearch):
+    try:
+        return JSONResponse(search_ideas(item.query, item.before), headers={"Cache-Control": "no-store"})
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 def markdown_download(filename, document):
