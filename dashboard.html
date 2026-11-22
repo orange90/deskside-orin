@@ -72,6 +72,17 @@
 .draft-options{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #voice-draft-count{font-size:12px;font-variant-numeric:tabular-nums}
 #voice-draft-status{color:var(--ink)}#voice-draft-status:empty{display:none}
+#voice-replacements{border-block:1px solid var(--line);margin-top:12px;padding:8px 0}
+#voice-replacements summary{cursor:pointer;font-weight:600;padding:3px 0}
+#voice-replacements fieldset{border:0;padding:0;margin:0;min-width:0}
+#voice-replacements p{margin:6px 0}#voice-replacements p:empty{display:none}
+.word-actions,.word-fields{display:flex;flex-wrap:wrap;align-items:end;gap:6px;margin:6px 0}
+.word-fields label{flex:1;min-width:min(120px,100%);font-size:12px}
+.word-fields input{display:block;width:100%}
+#voice-replacements button{font-size:13px;white-space:normal;overflow-wrap:anywhere}
+#replacement-list{list-style:none;padding:0;max-height:11rem;overflow:auto}
+#replacement-list li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+#replacement-list button{flex:none}
 .live-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.live-actions a{color:var(--ink);font-size:13px;text-underline-offset:3px}
 .focus-card{margin-top:16px}
 .focus-card .section-head{margin-bottom:12px}
@@ -290,9 +301,20 @@
       <label><input id="voice-draft-save" type="checkbox">保存这次对话</label>
       <span id="voice-draft-count" class="muted"></span>
     </div>
-    <p id="voice-draft-status" role="status"></p>
-    <div class="modal-actions"><button id="voice-draft-discard" type="button">放弃草稿</button><button id="voice-draft-send" class="primary">发送给助手</button></div>
   </form>
+  <details id="voice-replacements"><summary>常用改字</summary>
+    <fieldset id="replacement-controls" aria-label="常用改字">
+      <p id="replacement-read" role="status"></p><button type="button" id="replacement-retry" hidden>重新读取词表</button>
+      <div id="replacement-candidates" class="word-actions"></div>
+      <p id="replacement-result" role="status"></p><button type="button" id="replacement-undo" hidden>撤销刚才的改字</button>
+      <details id="replacement-manage" hidden><summary>管理词条</summary>
+        <div class="word-fields"><label>听写成<input id="replacement-heard" autocomplete="off"></label><label>应写作<input id="replacement-written" autocomplete="off"></label><button type="button" id="replacement-add">保存词条</button></div>
+        <p id="replacement-feedback" role="status"></p><ul id="replacement-list" aria-label="已保存的词条"></ul>
+      </details>
+    </fieldset>
+  </details>
+  <p id="voice-draft-status" role="status"></p>
+  <div class="modal-actions"><button id="voice-draft-discard" type="button">放弃草稿</button><button id="voice-draft-send" type="submit" form="voice-draft-form" class="primary">发送给助手</button></div>
 </dialog>
 <dialog id="segment-modal" class="modal" aria-labelledby="segment-title" aria-describedby="segment-details">
   <div class="modal-head"><h2 id="segment-title">校正这段活动</h2></div>
@@ -1692,6 +1714,114 @@ el('question').onsubmit=e=>{
 };
 const reviewVoice=el('voice-review'), draftDialog=el('voice-draft'), draftText=el('voice-draft-text');
 let reviewThisRecording=false, draftSending=false;
+const wordPanel=el('voice-replacements'), wordPath='/api/voice/replacements';
+const heardInput=el('replacement-heard'), writtenInput=el('replacement-written'), usedPairs=new Set();
+let wordRules=null, wordRead=0, wordDraft=0, wordWriting=false, wordAttempt=null, wordUndo=null;
+function resetWords(){
+  wordDraft++; wordRead++; wordRules=null; wordWriting=false; wordAttempt=wordUndo=null; usedPairs.clear();
+  wordPanel.open=el('replacement-manage').open=false;
+  heardInput.value=writtenInput.value='';
+  for(const id of ['replacement-read','replacement-feedback','replacement-result','replacement-list','replacement-candidates']) el(id).replaceChildren();
+  el('replacement-undo').hidden=el('replacement-manage').hidden=el('replacement-retry').hidden=true;
+}
+function wordButton(rule,label,onClick){
+  const button=make('button','',label); button.type='button'; button.dataset.ruleId=rule.id; button.onclick=onClick;
+  return button;
+}
+function wordPair(rule){return JSON.stringify([rule.heard,rule.written])}
+function showCandidates(){
+  const list=el('replacement-candidates');
+  if(!wordPanel.open || !wordRules) return;
+  const buttons=[];
+  for(const rule of wordRules){
+    if(usedPairs.has(wordPair(rule))) continue;
+    const count=draftText.value.split(rule.heard).length-1;
+    if(count) buttons.push(wordButton(rule,rule.heard+' → '+rule.written+' · 改 '+count+' 处',()=>applyWord(rule)));
+  }
+  list.replaceChildren(...(buttons.length?buttons:[make('span','muted',wordRules.length?'当前草稿没有可应用的词条。':'词表为空，可在下方添加。')]));
+}
+function applyWord(rule){
+  if(draftSending || wordWriting || usedPairs.has(wordPair(rule))) return;
+  const before=draftText.value, parts=before.split(rule.heard), count=parts.length-1;
+  if(!count) return;
+  const size=Array.from(before).length+count*(Array.from(rule.written).length-Array.from(rule.heard).length);
+  const after=size<=540?parts.join(rule.written):null, issue=after===null?'超过可发送的长度':querySizeError(after);
+  if(issue){text('replacement-result','草稿保留原文。改字后'+issue+'。');return}
+  const key=wordPair(rule);
+  wordUndo={before,after,key}; usedPairs.add(key); draftText.value=after;
+  updateDraftControls(); showCandidates(); text('replacement-result','已改 '+count+' 处。');
+  el('replacement-undo').hidden=false; el('replacement-undo').focus();
+}
+el('replacement-undo').onclick=()=>{
+  if(draftSending || wordWriting || !wordUndo || draftText.value!==wordUndo.after) return;
+  draftText.value=wordUndo.before; usedPairs.delete(wordUndo.key); wordUndo=null;
+  el('replacement-undo').hidden=true; updateDraftControls(); showCandidates();
+  text('replacement-result','已撤销刚才的改字。'); draftText.focus();
+};
+function showWordRules(){
+  showCandidates();
+  const manager=el('replacement-manage'); manager.hidden=!wordRules;
+  if(!wordRules) return;
+  manager.querySelector('summary').textContent='管理词条（'+wordRules.length+' / 32）';
+  el('replacement-list').replaceChildren(...wordRules.map(rule=>{
+    const row=make('li'), button=wordButton(rule,'移除',()=>{
+      if(confirm('从本机词表移除「'+rule.heard+' → '+rule.written+'」？')) void writeWord(rule,true);
+    });
+    button.setAttribute('aria-label','移除词条 '+rule.heard+' → '+rule.written);
+    row.append(make('span','',rule.heard+' → '+rule.written),button); return row;
+  }));
+}
+async function loadWords(){
+  const serial=++wordRead;
+  if(!draftDialog.open || !wordPanel.open || wordWriting) return;
+  text('replacement-read','正在读取本机词表…'); el('replacement-retry').hidden=true;
+  try{
+    const reply=await request(wordPath);
+    if(serial!==wordRead || !wordPanel.open || !draftDialog.open) return;
+    wordRules=reply.items; text('replacement-read',''); showWordRules();
+  }catch{
+    if(serial!==wordRead || !wordPanel.open || !draftDialog.open) return;
+    text('replacement-read',wordRules?'未能更新词表。当前显示上次读取的词条。':'暂时无法读取本机词表，仍可手动校对。');
+    el('replacement-retry').hidden=false;
+  }
+}
+wordPanel.ontoggle=loadWords; el('replacement-retry').onclick=loadWords;
+async function writeWord(rule,remove){
+  if(!wordPanel.open || !draftDialog.open || draftSending || wordWriting) return;
+  const generation=wordDraft;
+  wordWriting=true; wordRead++; updateDraftControls();
+  text('replacement-read',''); text('replacement-feedback',remove?'正在移除…':'正在保存…');
+  try{
+    const reply=await request(remove?wordPath+'/'+encodeURIComponent(rule.id)+'/remove':wordPath,remove?{}:rule,10000);
+    if(generation!==wordDraft) return;
+    if(!reply.active) wordRules=wordRules.filter(r=>r.id!==reply.id);
+    else if(!wordRules.some(r=>r.id===reply.id)) wordRules.push({id:reply.id,heard:reply.heard,written:reply.written});
+    if(!remove){wordAttempt=null;heardInput.value=writtenInput.value=''}
+    text('replacement-feedback',remove?'词条已移除。':reply.active?'词条已保存到本机。':'这次保存的词条已经被移除。');
+    showWordRules();
+  }catch(error){
+    if(generation!==wordDraft) return;
+    const certain=error.status>=400 && error.status<500;
+    if(certain && !remove) wordAttempt=null;
+    text('replacement-feedback',certain?error.message:'未确认是否'+(remove?'移除':'保存')+'。可重试同一操作，或重新读取词表。');
+    el('replacement-retry').hidden=false;
+  }finally{
+    if(generation===wordDraft){
+      wordWriting=false; updateDraftControls();
+      if(wordPanel.open && el('replacement-manage').open && document.activeElement===document.body)
+        (remove?el('replacement-manage').querySelector('summary'):heardInput).focus();
+    }
+  }
+}
+el('replacement-add').onclick=()=>{
+  const heard=heardInput.value.trim(), written=writtenInput.value.trim();
+  if([heard,written].some(s=>!s || Array.from(s).length>40 || /[\n\r\v\f\u001c-\u001e\u0085\u2028\u2029]/u.test(s))){
+    text('replacement-feedback','听写词和正确写法各需 1 至 40 个字，限单行。');return;
+  }
+  if(heard===written){text('replacement-feedback','请填入不同的正确写法。');return}
+  if(!wordAttempt || wordAttempt.heard!==heard || wordAttempt.written!==written) wordAttempt={id:crypto.randomUUID(),heard,written};
+  void writeWord(wordAttempt,false);
+};
 try{reviewVoice.checked=localStorage.getItem('deskside-voice-review')==='yes'}catch{}
 reviewVoice.onchange=()=>{
   try{localStorage.setItem('deskside-voice-review',reviewVoice.checked?'yes':'no')}catch{}
@@ -1699,11 +1829,12 @@ reviewVoice.onchange=()=>{
 function updateDraftControls(){
   const length=queryLength(draftText.value), issue=querySizeError(draftText.value,length);
   text('voice-draft-count',issue || length+' / 500 字');
-  el('voice-draft-send').disabled=draftSending || !draftText.value.trim() || !!issue;
-  el('voice-draft-discard').disabled=el('voice-draft-save').disabled=draftSending;
+  el('voice-draft-send').disabled=draftSending || wordWriting || !draftText.value.trim() || !!issue;
+  el('voice-draft-discard').disabled=el('voice-draft-save').disabled=el('replacement-controls').disabled=draftSending || wordWriting;
   draftText.readOnly=draftSending;
 }
 function openVoiceDraft(query){
+  resetWords();
   draftText.value=query;
   el('voice-draft-save').checked=el('save').checked;
   text('voice-draft-status','');
@@ -1712,17 +1843,24 @@ function openVoiceDraft(query){
   draftDialog.showModal();
 }
 function discardVoiceDraft(){
-  if(draftSending) return;
-  draftDialog.close();
+  if(draftSending || wordWriting) return;
+  closeVoiceDraft();
   text('feedback','已放弃语音草稿。');
 }
-draftText.oninput=updateDraftControls;
+draftText.oninput=()=>{
+  wordUndo=null; el('replacement-undo').hidden=true; text('replacement-result','');
+  updateDraftControls(); showCandidates();
+};
 el('voice-draft-discard').onclick=discardVoiceDraft;
 draftDialog.oncancel=e=>{e.preventDefault();discardVoiceDraft()};
-draftDialog.onclose=()=>{
+function clearVoiceDraft(){
+  if(draftDialog.open) return;
+  resetWords();
   draftText.value=''; queryAttempts.delete('draft'); text('voice-draft-status','');
   el('voice').focus({preventScroll:true});
-};
+}
+function closeVoiceDraft(){draftDialog.close();clearVoiceDraft()}
+draftDialog.onclose=clearVoiceDraft;
 el('voice-draft-form').onsubmit=async e=>{
   e.preventDefault();
   if(!draftDialog.open || draftSending) return;
@@ -1735,7 +1873,7 @@ el('voice-draft-form').onsubmit=async e=>{
     const reply=await submitQuery('draft',query,save);
     el('save').checked=save;
     text('feedback','已发送：'+query+'\n本机回复：'+reply.answer);
-    draftDialog.close();
+    closeVoiceDraft();
     void refresh();
   }catch(error){
     text('voice-draft-status',error.status?error.message:'未收到本机答复。草稿已保留，可重试。');

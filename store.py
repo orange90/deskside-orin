@@ -42,6 +42,11 @@ def initialize():
             CREATE TABLE IF NOT EXISTS idea_requests (
                 request_id TEXT PRIMARY KEY, note_id INTEGER NOT NULL UNIQUE REFERENCES notes(id) ON DELETE CASCADE);
             CREATE INDEX IF NOT EXISTS ideas_by_day ON notes(at,id) WHERE kind='idea';
+            CREATE TABLE IF NOT EXISTS voice_replacements (
+                sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE,
+                heard TEXT NOT NULL UNIQUE, written TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS voice_replacement_requests (
+                request_id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, pair_hash BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL,
                 due REAL, fired INTEGER NOT NULL DEFAULT 0);

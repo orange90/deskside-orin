@@ -25,6 +25,7 @@ from idea_search import search_ideas
 import field_trials
 import privacy_pause
 import reminder_queue
+import voice_replacements
 import interval_corrections
 import activity_evidence
 import model_registry
@@ -653,6 +654,12 @@ class IdeaSearch(BaseModel):
     before: str | None = Field(default=None, strict=True, max_length=512)
 
 
+class VoiceReplacement(BaseModel):
+    id: uuid.UUID
+    heard: str = Field(strict=True)
+    written: str = Field(strict=True)
+
+
 class ResumeHandoff(BaseModel):
     id: uuid.UUID
 
@@ -1074,6 +1081,27 @@ def query(item: Query):
         return add_idea_date(reply, item.text, item.id)
     except (OSError, ValueError) as error:
         raise HTTPException(503, str(error)) from error
+
+
+@app.get("/api/voice/replacements")
+def list_voice_replacements():
+    return JSONResponse(voice_replacements.list_rules(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/voice/replacements")
+def save_voice_replacement(item: VoiceReplacement):
+    try:
+        result = voice_replacements.save_rule(str(item.id), item.heard, item.written)
+    except voice_replacements.RuleConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/voice/replacements/{rule_id}/remove")
+def remove_voice_replacement(rule_id: uuid.UUID):
+    return JSONResponse(voice_replacements.remove_rule(str(rule_id)), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/voice/start")
