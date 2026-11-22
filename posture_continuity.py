@@ -11,6 +11,7 @@ def bridge_posture_gaps(rows):
             row.update(state=row['state'][10:], source='estimated')
     person = sorted((r for r in result if r['kind'] == 'person'), key=lambda r: r['start'])
     presence = sorted((r for r in result if r['kind'] == 'presence'), key=lambda r: r['start'])
+    presence_index = 0
     for i in range(1, len(person) - 1):
         before, gap, after = person[i-1:i+2]
         if (gap['state'] != 'unknown' or not 0 < gap['end']-gap['start'] <= MAX_GAP_SECONDS
@@ -23,13 +24,16 @@ def bridge_posture_gaps(rows):
         # Unknown/missing presence includes camera outages, dark frames and restarts.
         cursor = gap['start']
         covered = True
-        for row in presence:
-            if row['end'] <= gap['start'] or row['start'] >= gap['end']:
-                continue
+        while presence_index < len(presence) and presence[presence_index]['end'] <= cursor:
+            presence_index += 1
+        j = presence_index
+        while j < len(presence) and cursor < gap['end']:
+            row = presence[j]
             if row['state'] != 'present' or row['start'] > cursor + .001:
                 covered = False
                 break
             cursor = max(cursor, row['end'])
+            j += 1
         if covered and cursor >= gap['end']:
             gap.update(state=before['state'], source='continuity', original_state='unknown',
                        inferred_seconds=gap['end']-gap['start'],

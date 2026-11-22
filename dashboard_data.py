@@ -1,8 +1,7 @@
 """Read-only dashboard projections. Raw intervals and notes are never rewritten."""
 from datetime import date, datetime, time, timedelta
 import store
-from activity_annotations import apply_annotations
-from posture_continuity import bridge_posture_gaps, MAX_GAP_SECONDS
+from posture_continuity import MAX_GAP_SECONDS
 
 
 def merge_intervals(rows):
@@ -59,27 +58,21 @@ def dashboard_snapshot(day=None, now=None):
     end = datetime.combine(chosen + timedelta(days=1), time.min, store.TZ).timestamp()
     cutoff = min(end, now.timestamp())
     with store.database() as db:
-        raw = [dict(r) for r in db.execute(
-            'SELECT * FROM intervals WHERE end>? AND start<? ORDER BY kind,start', (start, cutoff))]
+        db.execute('BEGIN')
+        rows, annotations = store.activity_window(db, start, cutoff, now.timestamp())
         notes = [dict(r) for r in db.execute(
             'SELECT * FROM notes WHERE at>=? AND at<? ORDER BY at,id', (start, cutoff))]
-        annotations = [dict(r) for r in db.execute(
-            'SELECT * FROM activity_annotations WHERE end>? AND start<? ORDER BY id', (start, cutoff))]
         first = db.execute('SELECT MIN(start) FROM intervals').fetchone()[0]
         settings = dict(db.execute('SELECT key,value FROM settings'))
         today_start = datetime.combine(now.date(), time.min, store.TZ).timestamp()
         reminders = [dict(r) for r in db.execute(
             "SELECT id,body,at FROM notes WHERE kind='reminder' AND at>=? ORDER BY id DESC LIMIT 20", (today_start,))]
         tasks = [dict(r) for r in db.execute('SELECT * FROM tasks ORDER BY rowid DESC LIMIT 50')]
-    rows = [{**r, 'start': max(start, r['start']), 'end': min(cutoff, r['end'])} for r in raw]
-    raw_rows = merge_intervals(rows)
-    rows = merge_intervals(bridge_posture_gaps(apply_annotations(rows, annotations)))
+    totals = store.activity_totals(rows)
+    rows = merge_intervals(rows)
     inferred_seconds = sum(r.get('inferred_seconds', 0) for r in rows)
-    totals = {}
     hourly = [{'hour': h, 'sit': 0, 'stand': 0, 'away': 0, 'unknown': 0, 'privacy': 0} for h in range(24)]
     for r in rows:
-        if r['kind'] == 'person' or (r['kind'] == 'presence' and r['state'] == 'present'):
-            totals[r['state']] = totals.get(r['state'], 0) + r['end'] - r['start']
         if r['kind'] == 'person':
             for h in range(24):
                 overlap = max(0, min(r['end'], start + (h + 1) * 3600) - max(r['start'], start + h * 3600))
@@ -87,6 +80,6 @@ def dashboard_snapshot(day=None, now=None):
     return {'date': chosen.isoformat(), 'today': now.date().isoformat(), 'start': start, 'end': end,
             'as_of': now.timestamp(), 'cutoff': cutoff,
             'first_date': datetime.fromtimestamp(first, store.TZ).date().isoformat() if first else chosen.isoformat(),
-            'totals': {k: round(v) for k,v in totals.items()}, 'hourly': hourly, 'intervals': rows,
+            'totals': totals, 'hourly': hourly, 'intervals': rows,
             'continuity': {'max_gap_seconds': MAX_GAP_SECONDS, 'inferred_seconds': inferred_seconds},
-            'annotations': annotations, 'notes': group_notes(notes, raw_rows), 'raw_note_count': len(notes), 'active_reminders': reminders, 'settings': settings, 'tasks': tasks}
+            'annotations': annotations, 'notes': group_notes(notes, rows), 'raw_note_count': len(notes), 'active_reminders': reminders, 'settings': settings, 'tasks': tasks}

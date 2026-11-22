@@ -34,31 +34,41 @@ lock = threading.Lock()
 latest = {"ready": False}
 preview = None
 vision_epoch = 0
+last_publication = None
+
+
+def invalidate_scene_locked():
+    global vision_epoch
+    vision_epoch += 1
+    try:
+        _, pending, _, _, _ = events.get_nowait()
+    except queue.Empty:
+        return
+    if pending is not None:
+        pending.cancel()
 
 
 def publish(frame, **values):
-    global latest, preview, vision_epoch
+    global latest, preview, last_publication
     with lock:
         if latest.get("ready") and not latest.get("vision_paused") and (
                 not values.get("ready") or values.get("vision_paused")):
-            vision_epoch += 1
-            try:
-                _, pending, _, _ = events.get_nowait()
-            except queue.Empty:
-                pass
-            else:
-                if pending is not None:
-                    pending.cancel()
+            invalidate_scene_locked()
+        last_publication = time.monotonic()
         latest = values
         preview = frame
 
 
 class PostureReview:
+    # A reply can have waited behind voice work or another inference.
+    def deadline(self, interval, empty_candidate):
+        return self.requested + (max(4, interval + 2) if empty_candidate else 7)
+
     def __init__(self):
         self.pending = None
         self.requested = 0.0
         self.label = None
-        self.valid_until = 0.0
+        self.valid_until = self.label_at = 0.0
         self.absence = AbsenceEvidence()
         self.empty_candidate = None
 
@@ -66,9 +76,19 @@ class PostureReview:
         if self.pending is not None:
             self.pending.cancel()
         self.pending = self.label = None
-        self.requested = self.valid_until = 0.0
+        self.requested = self.valid_until = self.label_at = 0.0
         self.absence = AbsenceEvidence()
         self.empty_candidate = None
+
+    def invalidate_before(self, first_frame):
+        # A cached reply and the next pending reply may come from different
+        # frames. Preserve a pending request that already saw the new pose.
+        if self.label_at < first_frame:
+            self.label = None
+        if self.pending is not None and self.requested < first_frame:
+            self.pending.cancel()
+            self.pending = None
+            self.requested = 0.
 
     def update(self, frame, now, *, empty_candidate, interval):
         if self.empty_candidate is not None and self.empty_candidate != empty_candidate:
@@ -76,12 +96,15 @@ class PostureReview:
         self.empty_candidate = empty_candidate
         if self.pending is not None and self.pending.done():
             label = None if self.pending.cancelled() else self.pending.result()
+            if now >= self.deadline(interval, empty_candidate):
+                label = None
             confirmed_empty = self.absence.update(label, self.requested, empty_candidate)
             self.label = None
             if label in {"sitting", "standing", "present", "occluded"} or confirmed_empty:
                 self.label = {"sitting": "sit", "standing": "stand", "present": "present",
                               "occluded": "occluded", "away": "away"}[label]
-                self.valid_until = self.requested + (max(4, interval + 2) if empty_candidate else 7)
+                self.valid_until = self.deadline(interval, empty_candidate)
+                self.label_at = self.requested
             LOG.info("Presence review label=%s empty_candidate=%s confirmed_empty=%s", label, empty_candidate, confirmed_empty)
             self.pending = None
         if not empty_candidate:
@@ -91,7 +114,9 @@ class PostureReview:
         if self.pending is None and now - self.requested >= interval:
             reply = Future()
             try:
-                events.put_nowait(([frame()], reply, vision_epoch, "occupancy" if empty_candidate else "person"))
+                deadline = now + (max(4, interval + 2) if empty_candidate else 7)
+                events.put_nowait(([frame()], reply, vision_epoch,
+                                   "occupancy" if empty_candidate else "person", deadline))
             except queue.Full:
                 pass
             else:
@@ -131,7 +156,6 @@ def capture_frames():
     cv2.setNumThreads(1)
     posture, desk, facing = StableState(), StableState(), StableState()
     session = SittingSession()
-    presence = StableState()
     continuity = PresenceContinuity()
     estimate = OccupiedPosture()
     track = PersonTrackEvidence()
@@ -140,8 +164,11 @@ def capture_frames():
     last_sample = None
     frame_count = 0
     last_db = 0.0
+    last_recorded = None
     previous = "unknown"
-    person_roi = None
+    scene_config = None
+    multiple = False
+    observation_broken = False
     light = FrameLight()
     privacy = False
     last_subject_roi = None
@@ -159,30 +186,32 @@ def capture_frames():
             ok, frame = cap.read()
             ok = bool(ok and frame is not None and frame.size)
             now = time.monotonic()
+            captured_at = time.time()
             was_paused, was_private = light.paused, privacy
             brightness = float(frame[::24, ::24].mean()) if ok else None
             paused = light.update(now, brightness)
             privacy = light.sustained and 8 <= datetime.now(store.TZ).hour < 18
             if ok:
                 config = json.loads(CAL.read_text()) if CAL.exists() else {}
-                current_roi = config.get("person_roi")
-                if current_roi != person_roi:
+                person_roi = config.get("person_roi")
+                geometry = (frame.shape[:2], person_roi, config.get("cosmos_roi"), config.get("desk_roi"),
+                            config.get("low"), config.get("high"))
+                gap = last_sample is not None and now - last_sample >= 3
+                scene_changed = scene_config is not None and geometry != scene_config
+                if gap or scene_changed or (paused and not was_paused):
+                    with lock:
+                        invalidate_scene_locked()
                     vision.boxes = None
                     review.clear()
-                    continuity = PresenceContinuity()
-                    estimate = OccupiedPosture()
-                    track = PersonTrackEvidence()
-                    person_roi = current_roi
+                    posture, desk, facing = (StableState() for _ in range(3))
+                    history.clear()
+                    last_subject_roi = None
+                    continuity, estimate, track = PresenceContinuity(), OccupiedPosture(), PersonTrackEvidence()
+                    session = SittingSession()
+                    previous, last_sample, multiple = "unknown", None, False
+                    observation_broken |= gap or scene_changed
+                scene_config = geometry
                 if paused:
-                    if not was_paused:
-                        vision.boxes = None
-                        review.clear()
-                        posture, desk, facing, presence = (StableState() for _ in range(4))
-                        history.clear()
-                        last_subject_roi = None
-                        continuity = PresenceContinuity()
-                        estimate = OccupiedPosture()
-                        track = PersonTrackEvidence()
                     ds = ps = present = orientation = "unknown"
                     edge_y = count = region_hint = pose_source = None
                     preview_data = None
@@ -190,10 +219,26 @@ def capture_frames():
                     reviewed = None
                 else:
                     d, p, edge_y, count, strong, orientation, region_hint, pose_source = vision.sample(frame, config)
-                    now = time.monotonic()
+                    multi = count > 1
+                    if multi != multiple or vision.overlay.get("subject_changed"):
+                        # The current skeleton and a previous in-flight reply
+                        # may describe different people.
+                        with lock:
+                            invalidate_scene_locked()
+                        review.clear()
+                        history.clear()
+                        last_subject_roi = None
+                        continuity, estimate, track = PresenceContinuity(), OccupiedPosture(), PersonTrackEvidence()
+                        posture, session, facing = StableState(), SittingSession(), StableState()
+                        previous = "unknown"
+                    multiple = multi
+                    tracked = track.observe(count, strong, vision.overlay.get("keypoints", []), now)
+                    hint = estimate.joint_hint(vision.overlay) if tracked and not multi else None
+                    if estimate.observe_joints(hint, now):
+                        review.invalidate_before(estimate.joint_since)
                     at_desk = "present" if count else "unknown"
                     reviewed = None
-                    if (p == "unknown" and count and strong <= 1) or p == "away":
+                    if (p == "unknown" and tracked and count == 1) or (not count and p == "away"):
                         roi = config.get("cosmos_roi") or person_roi or (0, 0, 1, 1)
                         empty_candidate = count == 0
                         interval = (6 if previous == "away" else 3) if empty_candidate else 1.5
@@ -208,14 +253,23 @@ def capture_frames():
                             p = at_desk = "unknown"
                     else:
                         review.clear()
-                    tracked = track.observe(count, strong, vision.overlay.get("keypoints", []), now)
                     if at_desk == "present" and not tracked:
                         at_desk, p, pose_source = "unknown", "unknown", None
                     at_desk, presence_source = continuity.update(at_desk, now)
-                    ds, ps = desk.update(d, now, .6), posture.update(p, now, 1.2)
-                    ps, pose_source = estimate.choose(p, ps, pose_source, at_desk == "present",
-                                                      now, vision.overlay or {})
-                    present = presence.update(at_desk, now, 1.2)
+                    # Track confirmation and clear-empty votes already debounce
+                    # presence. All consumers use this same answer on this frame.
+                    present = at_desk
+                    ds = desk.update(d, now, .6)
+                    if multi and present == "present":
+                        ps, pose_source = "unknown", "multiple_people"
+                        orientation, region_hint = "unknown", None
+                    elif present != "present":
+                        posture, estimate = StableState(), OccupiedPosture()
+                        ps, pose_source = present, "cosmos" if present == "away" else None
+                    else:
+                        stable = posture.update(p, now, 1.2)
+                        ps, pose_source = estimate.choose(p, stable, pose_source, True, now,
+                                                          (vision.overlay or {}) if tracked else {})
                     _, data = cv2.imencode(".jpg", frame)
                     preview_data = data.tobytes()
                 frame_count += 1
@@ -224,21 +278,23 @@ def capture_frames():
                         vision_model=vision.model_info, vision_ms=vision.model.last_ms if not paused else None,
                         presence_source=presence_source, occluded=reviewed == "occluded",
                         overlay=vision.overlay if not paused else None,
-                        image_width=frame.shape[1], image_height=frame.shape[0], captured_at=time.time(),
+                        image_width=frame.shape[1], image_height=frame.shape[0], captured_at=captured_at,
                         vision_paused=paused, privacy_active=privacy,
                         orientation=facing.update(orientation, now, .7),
                         frame_count=frame_count, frame_clock=now,
                         fps=round(1 / max(now - last_sample, .001), 1) if last_sample else 0)
-                if session.update("unknown" if (pose_source or "").startswith("estimate_") else ps, min(now - last_sample, .3) if last_sample else 0, sit_limit):
+                elapsed = now - last_sample if last_sample is not None else 0.
+                reminder_pose = "unknown" if (pose_source or "").startswith("estimate_") else ps
+                if session.update(reminder_pose, elapsed, sit_limit):
                     store.note("reminder", "已经坐了一段时间，可以起身活动一下。")
                 if region_hint:
                     last_subject_roi = region_hint
                 roi = config.get("cosmos_roi") or last_subject_roi
-                if not paused and roi and (not history or now - history[-1][0] >= .75):
+                if not paused and not multiple and roi and (not history or now - history[-1][0] >= .75):
                     history.append((now, desk_image(frame, roi)))
                 if ps != previous and previous in {"sit", "stand", "away"} and ps in {"sit", "stand", "away"} and history:
                     try:
-                        events.put_nowait(([data for _, data in history], None, vision_epoch, None))
+                        events.put_nowait(([data for _, data in history], None, vision_epoch, None, now + 8))
                     except queue.Full:
                         pass
                 previous, last_sample = ps, now
@@ -250,20 +306,24 @@ def capture_frames():
                 review.clear()
                 history.clear()
                 last_subject_roi = None
-                posture, desk, facing, presence = (StableState() for _ in range(4))
+                posture, desk, facing = (StableState() for _ in range(3))
+                session = SittingSession()
+                multiple = False
                 ds = ps = present = previous = "unknown"
                 last_sample = None
                 continuity = PresenceContinuity()
                 estimate = OccupiedPosture()
                 track = PersonTrackEvidence()
-            if now - last_db >= 1 or privacy != was_private or not ok:
-                wall = time.time()
-                continuous = bool(last_db and now - last_db < 3 and (ok or was_paused))
-                store.persist("desk", ds, wall, continuous)
-                estimated = ok and not paused and (pose_source or "").startswith("estimate_")
-                recorded = "estimated_" + ps if estimated else ps
-                store.persist("person", "privacy" if privacy else recorded, wall, continuous)
-                store.persist("presence", present, wall, continuous)
+            estimated = ok and not paused and (pose_source or "").startswith("estimate_")
+            recorded = "estimated_" + ps if estimated else ps
+            states = {"desk": ds, "person": "privacy" if privacy else recorded, "presence": present}
+            # Transitions take effect at this frame's acquisition time. The
+            # one-second heartbeat only throttles unchanged observations.
+            if states != last_recorded or now - last_db >= 1 or observation_broken:
+                continuous = bool(not observation_broken and last_db and now - last_db < 3 and (ok or was_paused))
+                store.persist_sample(states, captured_at, continuous)
+                last_recorded = states
+                observation_broken = False
                 last_db = now
             if not ok:
                 stop.wait(2)
@@ -276,13 +336,13 @@ def capture_frames():
 def cosmos():
     while not stop.is_set():
         try:
-            frames, reply, epoch, review_mode = events.get(timeout=.5)
+            frames, reply, epoch, review_mode, deadline = events.get(timeout=.5)
         except queue.Empty:
             continue
-        while epoch == vision_epoch and (voice.busy.is_set() or voice.recording):
+        while epoch == vision_epoch and time.monotonic() < deadline and (voice.busy.is_set() or voice.recording):
             if stop.wait(.15):
                 return
-        if epoch != vision_epoch:
+        if epoch != vision_epoch or time.monotonic() >= deadline:
             if reply is not None:
                 reply.cancel()
             continue
@@ -297,9 +357,9 @@ def cosmos():
             label, summary = describe_desk_frames(images, posture_review=reply is not None, review_mode=review_mode)
             with lock:
                 if reply is not None:
-                    reply.set_result(label if epoch == vision_epoch else None)
+                    reply.set_result(label if epoch == vision_epoch and time.monotonic() < deadline else None)
                     continue
-                if epoch != vision_epoch:
+                if epoch != vision_epoch or time.monotonic() >= deadline:
                     continue
                 store.note("cosmos", summary)
             LOG.info("Cosmos event took %.3fs, frames=%d, label=%s", time.monotonic() - started, len(images), label)
@@ -320,11 +380,26 @@ def reminder_loop():
         store.record_due_reminders()
 
 
+def capture_watchdog():
+    # An unplugged camera still publishes "unavailable". A native capture call
+    # that never returns cannot reach the normal reconnect or exception path.
+    started = time.monotonic()
+    while not stop.wait(2):
+        heartbeat = last_publication
+        elapsed = time.monotonic() - (started if heartbeat is None else heartbeat)
+        if elapsed > (90 if heartbeat is None else 30):
+            LOG.error("No capture heartbeat for %.1fs; requesting supervised restart", elapsed)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
 @asynccontextmanager
 async def lifespan(app):
+    global last_publication
+    last_publication = None
     store.initialize()
     stop.clear()
-    workers = [threading.Thread(target=f, daemon=True) for f in (camera, cosmos, reminder_loop)]
+    workers = [threading.Thread(target=f, daemon=True) for f in (camera, cosmos, reminder_loop, capture_watchdog)]
     workers.append(threading.Thread(target=monitor.run, args=(stop,), daemon=True))
     for worker in workers:
         worker.start()
@@ -396,9 +471,20 @@ def dashboard():
     return (ROOT / "dashboard.html").read_text()
 
 
+def camera_view():
+    """Published frames are immutable. A stalled capture must not look live."""
+    sample = latest
+    if sample.get("ready") and time.monotonic() - sample.get("frame_clock", 0) > 3:
+        return {"ready": False, "stale": True, "vision_paused": True,
+                "person": "unknown", "presence": "unknown", "people": None,
+                "privacy_active": bool(sample.get("privacy_active")),
+                "error": "摄像头没有新画面"}
+    return sample
+
+
 @app.get("/api/state")
 def state():
-    return {**store.snapshot(), "camera": latest, "recording": bool(voice.recording)}
+    return {**store.snapshot(), "camera": camera_view(), "recording": bool(voice.recording)}
 
 
 class ModelSelection(BaseModel):
@@ -443,7 +529,7 @@ def hardware():
 @app.get("/api/dashboard")
 def dashboard_history(date: str | None = None):
     try:
-        return {**dashboard_snapshot(date), "camera": latest, "recording": bool(voice.recording)}
+        return {**dashboard_snapshot(date), "camera": camera_view(), "recording": bool(voice.recording)}
     except ValueError:
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
 
@@ -451,9 +537,10 @@ def dashboard_history(date: str | None = None):
 @app.get("/api/live/frame")
 def live_frame():
     with lock:
-        if preview is None or latest.get("vision_paused") or latest.get("privacy_active"):
+        sample = camera_view()
+        if preview is None or not sample.get("ready") or sample.get("vision_paused") or sample.get("privacy_active"):
             raise HTTPException(423, "隐私保护或画面不可用，实时预览已暂停")
-        image, state = preview, dict(latest)
+        image, state = preview, dict(sample)
         epoch = vision_epoch
     return Response(json.dumps({"image": base64.b64encode(image).decode(), "camera": state, "epoch": epoch}),
                     media_type="application/json", headers={"Cache-Control": "no-store"})
@@ -462,8 +549,9 @@ def live_frame():
 @app.get("/api/calibration/frame")
 def frame():
     with lock:
-        image = preview
-        private = latest.get("privacy_active")
+        sample = camera_view()
+        image = preview if sample.get("ready") and not sample.get("vision_paused") else None
+        private = sample.get("privacy_active")
     if image is None:
         raise HTTPException(503, "隐私保护期间暂停预览" if private else "画面暂不可用")
     return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
@@ -482,7 +570,7 @@ def calibrate(point: str):
     if point not in {"low", "high"}:
         raise HTTPException(404)
     with lock:
-        position = latest.get("desk_edge")
+        position = camera_view().get("desk_edge")
         if position is None:
             raise HTTPException(409, "当前未找到足够清晰的桌沿，请缩小桌沿区域")
         config = json.loads(CAL.read_text()) if CAL.exists() else {}

@@ -1,6 +1,7 @@
 from concurrent.futures import Future
 import json
 from pathlib import Path
+from socket import socket
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -42,6 +43,9 @@ class FixtureCapture:
         pass
 
 class FixtureVision:
+    model_info = {"name": "synthetic"}
+    model = SimpleNamespace(last_ms=0.)
+    overlay = {"detections": [], "keypoints": []}
     def sample(self, frame, config):
         global samples
         assert mode == "bright"
@@ -55,7 +59,7 @@ def fixture_cosmos(*args, **kwargs):
     return "sitting", "stale image"
 
 def get(path):
-    with urlopen("http://127.0.0.1:8765" + path, timeout=2) as reply:
+    with urlopen(f"http://127.0.0.1:{port}" + path, timeout=2) as reply:
         return reply.read()
 
 def state():
@@ -86,19 +90,21 @@ cv2.VideoCapture = FixtureCapture
 vision.Vision = FixtureVision
 main.datetime = SimpleNamespace(now=lambda _: SimpleNamespace(hour=hour))
 main.describe_desk_frames = fixture_cosmos
-with TemporaryDirectory(dir="/dev/shm", prefix="orin-camera-privacy-") as folder:
+with TemporaryDirectory(dir="/dev/shm", prefix="orin-camera-privacy-") as folder, socket() as listener:
     store.ROOT = Path(folder)
     main.CAL = store.ROOT / "calibration.json"
-    server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=8765, log_level="warning"))
-    worker = Thread(target=server.run, daemon=True)
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(main.app, log_level="warning"))
+    worker = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
     worker.start()
     try:
         wait_for(lambda: state()["camera"].get("person") == "sit")
         assert get("/api/calibration/frame").startswith(b"\xff\xd8")
-        main.events.put_nowait(([b"synthetic"], None, main.vision_epoch))
+        main.events.put_nowait(([b"synthetic"], None, main.vision_epoch, None, time.monotonic()+8))
         assert entered_cosmos.wait(2)
         pending = Future()
-        main.events.put_nowait(([b"queued"], pending, main.vision_epoch))
+        main.events.put_nowait(([b"queued"], pending, main.vision_epoch, "person", time.monotonic()+7))
         mode = "black"
         wait_for(lambda: state()["camera"].get("vision_paused"))
         assert not state()["camera"]["privacy_active"]

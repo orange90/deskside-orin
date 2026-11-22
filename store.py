@@ -1,6 +1,7 @@
+import math
 import sqlite3
 from activity_annotations import apply_annotations
-from posture_continuity import bridge_posture_gaps
+from posture_continuity import bridge_posture_gaps, MAX_GAP_SECONDS
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -47,28 +48,57 @@ def initialize():
         """)
 
 
-def persist(kind, state, now, continuous):
+def _record_intervals(states, now, continuous, max_gap):
+    if not math.isfinite(now):
+        raise ValueError("Invalid sample time")
     with database() as db:
-        row = db.execute(
+        db.execute("BEGIN IMMEDIATE")
+        latest = {kind: db.execute(
             "SELECT * FROM intervals WHERE kind=? ORDER BY start DESC LIMIT 1", (kind,)
-        ).fetchone()
-        if row and row["state"] == state and (continuous or state == "unknown"):
-            db.execute("UPDATE intervals SET end=? WHERE kind=? AND start=?",
-                       (now, kind, row["start"]))
-        else:
+        ).fetchone() for kind in states}
+        # A backwards wall-clock correction must not create overlapping or
+        # negative ranges. Resume when this clock reaches the last observation.
+        if any(row and now < row["end"] for row in latest.values()):
+            return
+        for kind, state in states.items():
+            row = latest[kind]
             start = now
-            if row and row["end"] < now:
-                if continuous or row["state"] == "unknown":
+            if row:
+                previous_end = row["end"]
+                adjacent = continuous and (max_gap is None or now - previous_end <= max_gap)
+                if row["start"] == now:
+                    db.execute("UPDATE intervals SET state=? WHERE kind=? AND start=?",
+                               (state, kind, now))
+                    continue
+                if adjacent or row["state"] == "unknown":
                     db.execute("UPDATE intervals SET end=? WHERE kind=? AND start=?",
                                (now, kind, row["start"]))
-                else:
-                    gap = max(row["end"], row["start"] + .000001)
-                    if gap < now and state == "unknown":
-                        start = gap
-                    elif gap < now:
-                        db.execute("INSERT OR IGNORE INTO intervals VALUES (?, 'unknown', ?, ?)",
-                                   (kind, gap, now))
+                    if row["state"] == state:
+                        continue
+                elif previous_end < now:
+                    # A solitary sample occupies no duration. Turn its marker
+                    # into the missing-data range instead of fabricating time.
+                    if previous_end == row["start"]:
+                        db.execute("UPDATE intervals SET state='unknown',end=? WHERE kind=? AND start=?",
+                                   (now, kind, row["start"]))
+                        if state == "unknown":
+                            continue
+                    elif state == "unknown":
+                        start = previous_end
+                    else:
+                        db.execute("INSERT INTO intervals VALUES (?, 'unknown', ?, ?)",
+                                   (kind, previous_end, now))
             db.execute("INSERT INTO intervals VALUES (?,?,?,?)", (kind, state, start, now))
+
+
+def persist(kind, state, now, continuous):
+    """Compatibility entry point for offline replay with caller-defined cadence."""
+    _record_intervals({kind: state}, now, continuous, None)
+
+
+def persist_sample(states, now, continuous):
+    """Commit all three 1 Hz camera timelines together, also guarding wall time."""
+    _record_intervals(states, now, continuous, 3.0)
 
 
 def note(kind, body):
@@ -76,24 +106,47 @@ def note(kind, body):
         db.execute("INSERT INTO notes(kind,body,at) VALUES (?,?,?)", (kind, body, time.time()))
 
 
-def snapshot():
-    now = datetime.now(TZ)
-    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+def activity_window(db, start, cutoff, as_of):
+    """Read both sides of a midnight-spanning short gap before clipping it."""
+    if cutoff <= start:
+        return [], []
+    left = start - MAX_GAP_SECONDS - 1
+    right = min(as_of, cutoff + MAX_GAP_SECONDS + 1)
+    rows = [dict(r) for r in db.execute(
+        'SELECT * FROM intervals WHERE end>? AND start<? ORDER BY start DESC', (left, right))]
+    for row in rows:
+        row['end'] = min(row['end'], right)
+    annotations = [dict(r) for r in db.execute(
+        'SELECT * FROM activity_annotations WHERE end>? AND start<? ORDER BY id', (left, right))]
+    result = []
+    for row in bridge_posture_gaps(apply_annotations(rows, annotations)):
+        row['start'], row['end'] = max(row['start'], start), min(row['end'], cutoff)
+        if row['end'] <= row['start']:
+            continue
+        if row.get('source') == 'continuity':
+            row['inferred_seconds'] = row['end'] - row['start']
+            row['inferred_ranges'] = [{'start': row['start'], 'end': row['end']}]
+        result.append(row)
+    return result, [a for a in annotations if a['start'] < cutoff and a['end'] > start]
+
+
+def activity_totals(rows):
     totals = {}
+    for row in rows:
+        state = row['state']
+        if row['kind'] == 'person' or (row['kind'] == 'presence' and state == 'present'):
+            totals[state] = totals.get(state, 0.) + (row['end'] - row['start'])
+    return {state: round(seconds) for state, seconds in totals.items()}
+
+
+def snapshot(now=None):
+    now = now or datetime.now(TZ)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     with database() as db:
-        rows = [dict(r) for r in db.execute(
-            "SELECT * FROM intervals WHERE end>=? ORDER BY start DESC", (midnight,)
-        )]
-        annotations = [dict(r) for r in db.execute(
-            'SELECT * FROM activity_annotations WHERE end>? AND start<? ORDER BY id', (midnight, now.timestamp()))]
-        rows = bridge_posture_gaps(apply_annotations(rows, annotations))
-        for row in rows:
-            row["start"] = max(midnight, row["start"])
-            state = row["state"]
-            if row["kind"] == "person" or (row["kind"] == "presence" and state == "present"):
-                totals[state] = totals.get(state, 0) + row["end"] - row["start"]
+        db.execute("BEGIN")
+        rows, _ = activity_window(db, midnight, now.timestamp(), now.timestamp())
         return {
-            "totals": {key: round(value) for key, value in totals.items()},
+            "totals": activity_totals(rows),
             "settings": dict(db.execute("SELECT key,value FROM settings").fetchall()),
             "intervals": rows,
             "notes": [dict(r) for r in db.execute("SELECT * FROM notes ORDER BY id DESC LIMIT 50")],

@@ -16,7 +16,7 @@ def letterbox(image):
     if min(height, width) <= 0:
         raise ValueError('Empty camera crop')
     gain = min(640 / height, 640 / width)
-    resized_width, resized_height = round(width*gain), round(height*gain)
+    resized_width, resized_height = max(1, round(width*gain)), max(1, round(height*gain))
     left = round((640-resized_width)/2 - .1)
     top = round((640-resized_height)/2 - .1)
     canvas = np.full((640, 640, 3), 114, dtype=np.uint8)
@@ -44,8 +44,15 @@ def decode(output, shape, transform):
     height, width = shape[:2]
     boxes[:, [0, 2]] = np.clip((boxes[:, [0, 2]]-left)/gain, 0, width)
     boxes[:, [1, 3]] = np.clip((boxes[:, [1, 3]]-top)/gain, 0, height)
-    joints[:, :, 0] = np.clip((joints[:, :, 0]-left)/gain, 0, width)
-    joints[:, :, 1] = np.clip((joints[:, :, 1]-top)/gain, 0, height)
+    joints[:, :, 0] = (joints[:, :, 0]-left)/gain
+    joints[:, :, 1] = (joints[:, :, 1]-top)/gain
+    outside = ((joints[:, :, 0] < 0) | (joints[:, :, 0] >= width) |
+               (joints[:, :, 1] < 0) | (joints[:, :, 1] >= height))
+    # Padding is not part of the camera image. A clamped landmark must not
+    # vote for posture, presence, or a visible joint in the dashboard.
+    joints[:, :, 2][outside] = 0
+    joints[:, :, 0] = np.clip(joints[:, :, 0], 0, width-1)
+    joints[:, :, 1] = np.clip(joints[:, :, 1], 0, height-1)
     valid = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
     return np.column_stack((boxes, predictions[keep, 4]))[valid], joints[valid]
 

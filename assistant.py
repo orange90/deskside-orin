@@ -5,6 +5,7 @@ import wave
 import os
 import signal
 import subprocess
+from datetime import date, datetime, timedelta
 import tempfile
 import threading
 import time
@@ -117,21 +118,81 @@ def explicit_tool(query):
     return None
 
 
+def activity_answer(query, now=None):
+    # Match a duration/goal attached to a posture, not a character inside
+    # an unrelated noun ("车站") or the object of a reminder.
+    if re.search(r"提醒我|待办|帮我记|应该|建议|多久合适", query):
+        return None
+    duration = r"(?:多久|多长(?:时间)?|(?:多少|几)(?:个)?(?:小时|分钟|秒|时间)|多少(?=[？?。！!\s]*$)|时长|时间(?:是多少|多长))"
+    posture_suffix = r"(?:姿(?:势)?|着|立|了|的|累计|总共|一共|总|各|分别|持续)*"
+    combined = re.search(r"(?:坐(?:姿)?(?:和|与|、|跟|及)?站(?:姿|立)?|站(?:姿|立)?(?:和|与|、|跟|及)?坐(?:姿)?)"
+                         + posture_suffix + duration, query)
+    # Joining punctuation such as "坐了多久、站了多久" works independently.
+    sitting = bool(combined or re.search(r"坐" + posture_suffix + duration, query))
+    standing = bool(combined or re.search(r"站" + posture_suffix + duration, query)
+                    or re.search(r"站(?:立|姿)?(?:的)?(?:目标|进度)", query))
+    present = bool(re.search(r"(?:在位|工位|桌前)(?:在位|停留|待|在|了|的|累计|总共|一共|总)*"
+                             + duration, query))
+    if not (sitting or standing or present):
+        return None
+
+    now = now or datetime.now(store.TZ)
+    today = now.date()
+    requested = set()
+    for token, offset in (("今天", 0), ("昨天", 1), ("前天", 2), ("明天", -1)):
+        if token in query:
+            requested.add(today - timedelta(days=offset))
+    for year, month, day in re.findall(r"(?:(\d{4})年)?(\d{1,2})月(\d{1,2})[日号]", query):
+        try:
+            requested.add(date(int(year or today.year), int(month), int(day)))
+        except ValueError:
+            return "请给出有效的查询日期。"
+    for iso in re.findall(r"\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b", query, re.ASCII):
+        try:
+            requested.add(date.fromisoformat(iso))
+        except ValueError:
+            return "请给出有效的查询日期。"
+    restricted_period = any(word in query for word in
+            ("本周", "这周", "上周", "本月", "上月", "最近", "这几天", "过去", "上个月", "本星期",
+             "上午", "下午", "早上", "晚上", "本次", "这次", "这一次", "连续", "到现在", "几点")) or re.search(
+            r"(?:[0-9一二两三四五六七八九十]+点|[0-9]{1,2}:[0-9]{2})", query)
+    if len(requested) > 1 or restricted_period:
+        return "可查询单日累计时长，请给出一天的日期。"
+    day = next(iter(requested), today)
+    if day > today:
+        return "这一天还没有活动记录。"
+    prefix = {today: "今天", today-timedelta(days=1): "昨天",
+              today-timedelta(days=2): "前天"}.get(day, day.isoformat())
+    start = datetime.combine(day, datetime.min.time(), store.TZ)
+    cutoff = min((start+timedelta(days=1)).timestamp(), now.timestamp())
+    with store.database() as db:
+        db.execute("BEGIN")
+        rows, _ = store.activity_window(db, start.timestamp(), cutoff, now.timestamp())
+        target = db.execute("SELECT value FROM settings WHERE key='stand_minutes'").fetchone()[0]
+    if not any(r['kind'] in {'presence', 'person'} for r in rows):
+        return prefix + "没有已记录的活动区间。"
+    totals = store.activity_totals(rows)
+    answers = []
+    for wanted, state, verb in [(sitting, "sit", "在桌前坐了"), (standing, "stand", "站了")]:
+        if wanted:
+            seconds = totals.get(state, 0)
+            estimate = round(sum((r["end"]-r["start"]) for r in rows
+                                 if r["kind"] == "person" and r["state"] == state
+                                 and r.get("source") in {"estimated", "continuity"}))
+            detail = f"，其中 {elapsed(estimate)} 为推算" if estimate else ""
+            answers.append(f"{verb} {elapsed(seconds)}{detail}")
+    if present:
+        answers.append(f"工位检测到人员在位 {elapsed(totals.get('present',0))}")
+    if standing and ("目标" in query or "进度" in query):
+        progress = "已达成" if totals.get("stand", 0) >= target * 60 else "尚未达成"
+        answers.append(f"按当前 {target} 分钟目标，{progress}")
+    return prefix + "，".join(answers) + "。"
+
+
 def respond(query, request_id, save, voice_reply=False):
-    totals = store.snapshot()
     instruction = explicit_tool(query)
-    if instruction is None and "坐" in query and any(term in query for term in ("多久", "多长", "时长", "多少")):
-        answer = f"今天在桌前坐了 {elapsed(totals['totals'].get('sit', 0))}。"
-    elif instruction is None and "站" in query and any(term in query for term in ("多久", "目标", "进度", "多长", "时长", "多少")):
-        seconds = totals["totals"].get("stand", 0)
-        target = totals["settings"]["stand_minutes"]
-        progress = "已达成" if seconds >= target * 60 else "尚未达成"
-        answer = f"今天站了 {elapsed(seconds)}，{target} 分钟的目标{progress}。"
-    elif instruction is None and any(term in query for term in ("工位", "桌前", "在位")) and any(
-        term in query for term in ("待了多久", "在了多久", "在位时长", "待了多长", "在工位多久")
-    ):
-        answer = f"今天工位检测到人员在位 {elapsed(totals['totals'].get('present', 0))}。"
-    else:
+    answer = activity_answer(query) if instruction is None else None
+    if answer is None:
         if instruction is None:
             answer_style = ("语音答复直接说结论。简单问题用十个字以内回答。听不清关键词时请用户重说。"
                             if voice_reply else "")
