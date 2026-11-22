@@ -80,7 +80,23 @@ ssh -N -L 127.0.0.1:8765:127.0.0.1:8765 orin
 
 然后打开 `http://127.0.0.1:8765`。语音按钮使用 Orin 的麦克风。Mac 通知接收器通过 `bash mac/install-reminders.sh` 安装，首次需允许 macOS 通知权限。
 
-更新现有部署先备份数据库和配置。不要用源码覆盖 `data.sqlite3`、`calibration.json`、`model-selection.json`；程序回滚也不应回滚已有活动数据库。
+### 更新前备份与恢复验证
+
+更新现有部署前，在 Orin 项目目录执行以下命令。数据库可以在服务运行时做一致性快照。`calibration.json` 和 `model-selection.json` 存在时各自读取，可能来自与数据库不同的时刻。归档还包含校验清单，模型权重、程序、日志和独立媒体文件均排除。ZIP 以明文保存活动记录、笔记等个人数据，请存放在自己控制的本地磁盘。
+
+创建时，目标磁盘须能同时容纳数据库副本和未压缩 ZIP。校验时，系统临时目录须能容纳一份数据库。
+
+```bash
+backup_dir="$HOME/deskside-backups"
+mkdir -p -m 700 "$backup_dir"
+stamp=$(date +%Y%m%d-%H%M%S)
+archive="$backup_dir/deskside-$stamp.zip"
+python3 data_backup.py create "$archive" &&
+  python3 data_backup.py verify "$archive" &&
+  python3 data_backup.py restore "$archive" "$backup_dir/check-$stamp"
+```
+
+`create` 默认从脚本所在目录读取 `data.sqlite3` 和配置。数据在别处时，可在创建命令末尾加 `--source-dir /实际数据目录`。创建归档和恢复数据时，父目录须已存在，目标路径须全新。示例将恢复结果放在独立的 `check-…` 目录供核对。程序回滚时，保留线上数据库和配置。
 
 ## 测试与已知限制
 
