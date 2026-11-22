@@ -1,4 +1,6 @@
 """Non-destructive human corrections, applied only when reading recorded intervals."""
+from bisect import bisect_right
+
 
 def _overlay(rows, start, end, update):
     changed = []
@@ -19,15 +21,39 @@ def _overlay(rows, start, end, update):
     return changed
 
 
-def apply_annotations(rows, annotations):
-    result = [dict(row) for row in rows]
-    # On disk the person clock marks privacy, while the presence clock can
-    # contain a single "unknown" row spanning both sides of that pause.
+def _mask_presence(rows):
+    # Privacy is stored on the person clock. A single presence row can span
+    # several pauses, especially when reviewing a full week of observations.
+    events = {}
     for row in rows:
-        if row['kind'] == 'person' and row['state'] == 'privacy':
-            result = _overlay(result, row['start'], row['end'],
-                              lambda r: {'state': 'privacy'} if r['kind'] == 'presence' else None)
+        if row['kind'] == 'person' and row['state'] == 'privacy' and row['end'] > row['start']:
+            for edge, change in ((row['start'], 1), (row['end'], -1)):
+                events[edge] = events.get(edge, 0) + change
+    edges = sorted(events)
+    depth = 0
+    masked = [False]
+    for edge in edges:
+        depth += events[edge]
+        masked.append(depth > 0)
 
+    result = []
+    for row in rows:
+        left, end = row['start'], row['end']
+        if not edges or row['kind'] != 'presence' or end <= left:
+            result.append(dict(row))
+            continue
+        index = bisect_right(edges, left)
+        while left < end:
+            right = min(edges[index], end) if index < len(edges) else end
+            result.append({**row, 'start': left, 'end': right,
+                           'state': 'privacy' if masked[index] else row['state']})
+            left = right
+            index += 1
+    return result
+
+
+def apply_annotations(rows, annotations):
+    result = _mask_presence(rows)
     for annotation in sorted(annotations, key=lambda item: item['id']):
         def correction(row):
             if row['kind'] not in {'person', 'presence'} or row['state'] == 'privacy':

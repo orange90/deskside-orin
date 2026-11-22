@@ -1,4 +1,5 @@
 """Read-only dashboard projections. Raw intervals and notes are never rewritten."""
+from collections import Counter
 from datetime import date, datetime, time, timedelta
 import store
 from posture_continuity import MAX_GAP_SECONDS
@@ -83,3 +84,47 @@ def dashboard_snapshot(day=None, now=None):
             'totals': totals, 'hourly': hourly, 'intervals': rows,
             'continuity': {'max_gap_seconds': MAX_GAP_SECONDS, 'inferred_seconds': inferred_seconds},
             'annotations': annotations, 'notes': group_notes(notes, rows), 'raw_note_count': len(notes), 'active_reminders': reminders, 'settings': settings, 'tasks': tasks}
+
+
+def _activity_day(db, day, now):
+    start = datetime.combine(day, time.min, store.TZ).timestamp()
+    cutoff = (now.timestamp() if day == now.date()
+              else datetime.combine(day + timedelta(days=1), time.min, store.TZ).timestamp())
+    rows, _ = store.activity_window(db, start, cutoff, now.timestamp())
+    totals = dict.fromkeys(('sit', 'stand', 'away', 'unknown', 'privacy', 'present'), 0)
+    totals.update(store.activity_totals(rows))
+    coverage = {'person': 0.0, 'presence': 0.0}
+    estimates = {'sit': 0.0, 'stand': 0.0}
+    for row in rows:
+        if row['kind'] not in coverage:
+            continue
+        duration = row['end'] - row['start']
+        coverage[row['kind']] += duration
+        if row['kind'] == 'person' and row.get('source') in {'estimated', 'continuity'}:
+            estimates[row['state']] += duration
+    return {'date': day.isoformat(), 'totals': totals,
+            'estimated_sit': round(estimates['sit']), 'estimated_stand': round(estimates['stand']),
+            'recorded_seconds': round(coverage['person']),
+            'presence_recorded_seconds': round(coverage['presence']), 'elapsed_seconds': round(cutoff - start)}
+
+
+def activity_week(end_date=None, now=None):
+    """Seven local calendar days, sharing one database snapshot and wall clock."""
+    now = (now or datetime.now(store.TZ)).astimezone(store.TZ)
+    end = now.date() if end_date is None else store.calendar_date(end_date)
+    if end > now.date():
+        raise ValueError('结束日期不能晚于北京时间今天')
+    if end.toordinal() < 7:
+        raise ValueError('结束日期之前不足七个自然日')
+    start = end - timedelta(days=6)
+    with store.database() as db:
+        db.execute('BEGIN')
+        days = [_activity_day(db, start + timedelta(days=n), now) for n in range(7)]
+    # Sum displayed daily seconds so drilling down to the daily dashboard agrees.
+    totals = Counter()
+    for day in days:
+        totals.update(day['totals'])
+    result = {'start_date': start.isoformat(), 'end_date': end.isoformat(), 'days': days, 'totals': dict(totals)}
+    for key in ('estimated_sit', 'estimated_stand', 'recorded_seconds', 'presence_recorded_seconds', 'elapsed_seconds'):
+        result[key] = sum(day[key] for day in days)
+    return result

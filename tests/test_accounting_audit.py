@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import store
+from activity_annotations import apply_annotations
 from assistant import activity_answer
 from dashboard_data import dashboard_snapshot
 
@@ -51,6 +52,16 @@ class ActivityAccounting(unittest.TestCase):
         self.assertEqual(day['totals']['sit'], 70)
         self.assertEqual(day['totals']['privacy'], 60)
         self.assertEqual(day['totals']['unknown'], 50)
+
+    def test_presence_is_split_at_privacy_edges_in_unsorted_records(self):
+        rows = [dict(kind='person', state='privacy', start=a, end=b)
+                for a, b in [(13, 18), (3, 10), (5, 7), (18, 20)]]
+        rows.append(dict(kind='presence', state='present', start=5, end=22))
+        shown = apply_annotations(rows, [dict(id=1, state='away', start=0, end=30)])
+        self.assertEqual([(r['start'], r['end'], r['state']) for r in shown if r['kind']=='presence'],
+                         [(5, 7, 'privacy'), (7, 10, 'privacy'), (10, 13, 'away'),
+                          (13, 18, 'privacy'), (18, 20, 'privacy'), (20, 22, 'away')])
+        self.assertEqual(rows[-1]['state'], 'present')
 
     def test_duplicate_and_reversed_clock_never_double_count(self):
         store.persist('person','sit',self.t,False)

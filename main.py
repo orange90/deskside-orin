@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 import store
 import model_registry
-from dashboard_data import dashboard_snapshot
+from dashboard_data import activity_week, dashboard_snapshot
 from telemetry import monitor
 from assistant import Voice, describe_desk_frames, respond
 from state import PersonTrackEvidence, OccupiedPosture, AbsenceEvidence, FrameLight, PresenceContinuity, SittingSession, StableState
@@ -538,6 +538,14 @@ def dashboard_history(date: str | None = None):
         return {**dashboard_snapshot(date), "camera": camera_view(), "recording": bool(voice.recording)}
     except ValueError:
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+
+
+@app.get("/api/activity/week")
+def weekly_activity(end_date: str | None = None):
+    try:
+        return activity_week(end_date)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/api/absences")

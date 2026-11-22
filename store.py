@@ -198,7 +198,7 @@ class AbsenceConflict(Exception):
     pass
 
 
-def _calendar_date(value):
+def calendar_date(value):
     try:
         day = date.fromisoformat(value)
     except (TypeError, ValueError):
@@ -209,7 +209,7 @@ def _calendar_date(value):
 
 
 def list_absences(day):
-    _calendar_date(day)
+    calendar_date(day)
     with database() as db:
         return [dict(row) for row in db.execute(
             "SELECT batch_id,start_date,end_date FROM absence_batches "
@@ -217,7 +217,7 @@ def list_absences(day):
 
 
 def create_absence(start_date, end_date, request_id=None, now=None):
-    first, last = _calendar_date(start_date), _calendar_date(end_date)
+    first, last = calendar_date(start_date), calendar_date(end_date)
     now = (now or datetime.now(TZ)).astimezone(TZ)
     if last < first or (last - first).days >= 31:
         raise ValueError("请选择连续的 1 至 31 天")

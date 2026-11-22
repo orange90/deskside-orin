@@ -22,6 +22,36 @@
 #absence-batches li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 0}
 #absence-batches button{flex:none;font-size:12px}
 @media(max-width:400px){#absence-modal{padding:20px}.absence-dates{grid-template-columns:1fr}}
+.week-review{margin-top:16px;padding:0;overflow:hidden}
+.week-review summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 23px;cursor:pointer;list-style:none;font-weight:600}
+.week-review summary::-webkit-details-marker{display:none}
+.week-review summary::after{content:'⌄';color:var(--green);font-size:17px}
+.week-review[open] summary::after{transform:rotate(180deg)}
+.week-review summary:focus-visible{outline-offset:-4px}
+.week-body{padding:0 23px 18px}.week-body p,.week-body caption{font-size:12px;color:var(--muted)}
+.week-total{display:flex;flex-wrap:wrap;gap:10px 35px;margin:15px 0;padding:14px 17px;background:#f3f6ef;border-radius:11px}
+.week-total dt,.week-value small{color:#5d7065;font-size:11px;font-weight:400}
+.week-total dd{margin:0;font-size:19px;font-weight:550}
+.week-value small{display:block}
+.week-table{border-collapse:collapse;width:100%;font-size:13px;text-align:left;font-variant-numeric:tabular-nums}
+.week-table caption{caption-side:bottom;text-align:left;padding-top:12px}
+.week-table :is(th,td){padding:9px 6px;vertical-align:top;border-bottom:1px solid var(--line);font-weight:400}
+.week-table thead th{font-size:12px;color:#5d7065}
+.week-table tbody th{font-weight:550}
+.week-day-link{border:0;padding:0;text-align:left;color:var(--green);text-decoration:underline;text-decoration-color:#a8bbab;text-underline-offset:3px}
+#week-retry{margin-top:8px;font-size:12px}
+@media(max-width:760px){
+  .week-review summary{padding:14px 17px}.week-body{padding:0 17px 15px}
+  .week-total{gap:12px 24px}.week-total dd{font-size:16px}
+  .week-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .week-table tbody tr{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));row-gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .week-table tbody :is(td,th){border:none;padding:0}
+  .week-table tbody th{grid-column:1/-1}
+  .week-table td{grid-column:span 3}
+  .week-table td:is([data-label="隐私"],[data-label="未知"],[data-label="未采集"]){grid-column:span 4}
+  .week-table .week-no-records{grid-column:span 8;align-self:end}
+  .week-table td::before{content:attr(data-label);display:block;color:#5d7065;font-size:11px}
+}
 </style>
 </head>
 <body>
@@ -46,6 +76,20 @@
 <div class="grid-main"><article class="card timeline-wrap"><div class="section-head"><div><h2>一天的活动轨迹</h2><p class="muted">北京时间 · 悬停或点按查看时间段</p></div><div class="legend" id="legend"></div></div><svg class="timeline-svg" id="timeline-chart" viewBox="0 0 760 130" role="img" aria-label="全天坐站及在位时间轴"></svg><div class="chart-divider"></div><div class="section-head" style="margin-bottom:10px"><h3>每小时活动构成</h3><span class="muted">分钟 / 小时</span></div><svg id="hour-chart" class="chart-svg" viewBox="0 0 760 150" role="img" aria-label="每小时坐姿、站姿、离开、未知和隐私保护分钟数"></svg><div class="chart-caption"><span id="coverage">等待记录</span><span>柱状图含全部状态 · 空白为无记录或未发生</span></div>
 <button id="open-absence" class="absence-open" type="button" aria-haspopup="dialog" hidden>确认本人离开…</button></article>
 <article class="card goal"><h2>站立目标</h2><div class="ring"><svg viewBox="0 0 120 120" aria-label="站立目标完成比例"><circle cx="60" cy="60" r="50" fill="none" stroke="#edf1e7" stroke-width="9"/><circle id="goal-arc" cx="60" cy="60" r="50" fill="none" stroke="#91b96b" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 314.16"/></svg><div class="ring-center"><strong id="goal-percent">—</strong><span id="goal-minutes">等待数据</span></div></div><div><p id="goal-message" style="font-size:12px">记录每一次起身</p><div class="current-box"><span class="current-icon">◷</span><div><b id="current">正在读取实时状态</b><p id="current-detail">摄像头状态</p></div></div></div><div class="goal-footer" id="privacy-total">隐私保护与未知时段单独统计</div></article></div>
+<details class="card week-review" id="week-review">
+  <summary>七日活动回顾</summary>
+  <div class="week-body">
+    <p id="week-status" role="status">正在读取七日记录…</p><button type="button" id="week-retry" hidden>重新读取</button>
+    <div id="week-content" hidden>
+      <dl class="week-total" id="week-total" aria-label="七日合计"></dl>
+      <table class="week-table">
+        <caption>点击日期查看当日记录。推算时长已计入坐姿和站姿。未采集按已过时间内的姿态记录空档计算。</caption>
+        <thead><tr><th scope="col">日期</th><th scope="col">在位</th><th scope="col">坐姿</th><th scope="col">站姿</th><th scope="col">离开</th><th scope="col">隐私</th><th scope="col">未知</th><th scope="col">未采集</th></tr></thead>
+        <tbody id="week-days"></tbody>
+      </table>
+    </div>
+  </div>
+</details>
 <section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><button id="live-toggle">开启实时画面</button></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div></div></section>
 <section id="hardware" class="section-block"><div class="section-title"><div><h2>设备的实时脉搏</h2><p>独立实时数据 · 最近 15 分钟趋势 · 每 15 秒采样</p></div><span class="muted" id="hardware-updated">等待采样</span></div><div class="hardware-grid">
 <article class="card hardware-metric"><div class="metric-label">GPU 使用率 <span>GPU</span></div><div class="value" id="gpu-value">—</div><svg id="gpu-spark" class="spark" viewBox="0 0 240 42" aria-label="GPU 使用率趋势"></svg><p class="hardware-sub" id="gpu-sub">等待遥测</p></article>
@@ -157,8 +201,107 @@ function spark(id,rows,field,max,color){const svg=el(id);svg.replaceChildren();s
 function kv(container,entries,unit=''){container.replaceChildren(...entries.map(([k,v])=>{const row=make('div','kv');row.append(make('span','',k),make('b','',v+unit));return row}));if(!entries.length)container.append(make('span','muted','不可用'))}
 function drawDisk(h){const svg=el('disk-chart');svg.replaceChildren();if(!h.disk_total_gib)return;const values=[['已使用',h.disk_used_gib,'#28634c'],['可用空间',h.disk_free_gib,'#bcd890'],['文件系统保留',Math.max(0,h.disk_total_gib-h.disk_used_gib-h.disk_free_gib),'#da9560']];let offset=0;const circumference=2*Math.PI*49;values.forEach(([label,value,color])=>{const length=value/h.disk_total_gib*circumference;const circle=svgNode('circle',{cx:60,cy:60,r:49,fill:'none',stroke:color,'stroke-width':14,'stroke-dasharray':`${length} ${circumference-length}`,'stroke-dashoffset':-offset});tooltip(circle,`${label} ${value.toFixed(1)} GiB · ${(value/h.disk_total_gib*100).toFixed(1)}%`);svg.append(circle);offset+=length});text('disk-free',h.disk_free_gib.toFixed(1));text('disk-total',`总容量 ${h.disk_total_gib.toFixed(1)} GiB`);el('disk-legend').replaceChildren(...values.map(([label,value,color])=>{const d=make('div'),l=make('div','disk-label'),k=make('span','key');k.style.background=color;l.append(k,document.createTextNode(label));d.append(l,make('strong','',value.toFixed(1)+' GiB'),make('small','',(value/h.disk_total_gib*100).toFixed(1)+'%'));return d}))}
 function renderHardware(){const h=hardware.latest;if(!h){text('hardware-updated','正在等待首个硬件样本');return}drawDisk(h);const rows=hardware.history.filter(r=>r.at>=h.at-900),metric=(id,value,unit)=>el(id).innerHTML=Number.isFinite(value)?`${value.toFixed(1)}<small>${unit}</small>`:'<small>不可用</small>';metric('gpu-value',h.gpu_pct,'%');metric('ram-value',h.ram_used_gib,'GiB');metric('cpu-value',h.cpu_pct,'%');metric('temp-value',h.temp_c,'°C');spark('gpu-spark',rows,'gpu_pct',100,'#28634c');spark('ram-spark',rows,'ram_used_gib',h.ram_total_gib||64,'#749958');spark('cpu-spark',rows,'cpu_pct',100,'#6b8d80');spark('temp-spark',rows,'temp_c',100,'#ca8b57');text('gpu-sub',Number.isFinite(h.gpu_mhz)?`GPU 频率 ${h.gpu_mhz.toFixed(0)} MHz`:'GPU 频率不可用');text('ram-sub',Number.isFinite(h.ram_total_gib)?`总计 ${h.ram_total_gib.toFixed(1)} GiB · 可用 ${h.ram_available_gib.toFixed(1)} GiB`:'内存读数不可用');text('cpu-sub',`在线核心 ${h.cpu_online||'不可用'} · 1 分钟负载 ${h.load?.[0]?.toFixed(2)??'—'}`);const temps=Object.entries(h.temperatures||{});text('temp-sub',temps.length?`${temps.length} 个传感器 · 最高值`:'温度传感器不可用');text('hardware-updated',`采样 ${precise(h.at)}${Date.now()/1000-h.at>45?' · 样本已过期':''}`);const parts=[['Swap',Number.isFinite(h.swap_used_gib)?h.swap_used_gib.toFixed(2)+' GiB':'不可用'],['磁盘剩余',Number.isFinite(h.disk_free_gib)?h.disk_free_gib.toFixed(1)+' GiB':'不可用'],['运行时长',h.uptime_s?duration(h.uptime_s):'不可用'],['Qwen',h.services?.Qwen?'就绪':'未就绪'],['Cosmos',h.services?.Cosmos?'就绪':'未就绪']];el('hardware-summary').replaceChildren(...parts.map(([k,v])=>{const span=make('span','',k+' ');span.append(make('b','',v));return span}));kv(el('power-detail'),Object.entries(h.power_rails_w||{}).map(([k,v])=>[k,v.toFixed(2)]),' W');kv(el('temp-detail'),temps.map(([k,v])=>[k,v.toFixed(1)]),' °C');el('cpu-cores').replaceChildren(...(h.cpu_cores||[]).map((v,i)=>make('span','core',`${i} · ${v===null?'离线':v+'%'}`)));kv(el('service-detail'),[['视觉服务',data?.camera?.ready?(data.camera.vision_paused?'采集暂停':'运行中'):'未就绪'],['风扇',Object.values(h.fan_rpm||{}).length?Object.values(h.fan_rpm).join(' / ')+' RPM':'转速不可用'],['磁盘总量',Number.isFinite(h.disk_total_gib)?h.disk_total_gib.toFixed(1)+' GiB':'不可用']])}
+const weekPanel=el('week-review');
+const weekColumns=[['present','在位'],['sit','坐姿'],['stand','站姿'],['away','离开'],['privacy','隐私'],['unknown','未知'],['missing','未采集']];
+let weekKey='', weekGeneration=0, weekLoading=false, weekCheckedAt=0;
+
+function weekValue(row,field){
+  const value=make('span','week-value');
+  if(field==='missing'){
+    value.textContent=duration(Math.max(0,row.elapsed_seconds-row.recorded_seconds));
+    return value;
+  }
+  const measured=field==='present'?row.presence_recorded_seconds:row.recorded_seconds;
+  value.textContent=measured>0?duration(row.totals[field]):'无记录';
+  if(row['estimated_'+field]>0) value.append(make('small','','含推算 '+duration(row['estimated_'+field])));
+  return value;
+}
+function openWeekDay(day){
+  weekPanel.open=false;
+  followToday=day===data.today;
+  el('day').value=day;
+  intervalLimit=20; noteLimit=12;
+  el('day').focus();
+  void refresh();
+}
+function renderWeek(week){
+  const total=el('week-total'), list=el('week-days');
+  const focusedDate=document.activeElement?.dataset.weekDate;
+  total.replaceChildren(); list.replaceChildren();
+  for(const [field,label] of weekColumns.slice(0,4)){
+    const pair=make('div'), value=make('dd');
+    value.append(weekValue(week,field));
+    pair.append(make('dt','','累计'+label),value); total.append(pair);
+  }
+  for(const day of week.days){
+    const row=make('tr'), date=make('th');
+    date.scope='row';
+    const label=day.date.slice(5).replace('-','/');
+    const measured=day.recorded_seconds>0 || day.presence_recorded_seconds>0;
+    if(measured){
+      const link=make('button','week-day-link',label);
+      link.type='button'; link.dataset.weekDate=day.date;
+      link.setAttribute('aria-label','查看 '+day.date+' 的活动记录');
+      link.onclick=()=>openWeekDay(day.date);
+      date.append(link);
+    }else date.textContent=label;
+    row.append(date);
+    if(!measured){
+      const missing=make('td','week-no-records muted','无姿态或在位记录');
+      missing.colSpan=weekColumns.length-1;
+      row.append(missing);
+    }
+    for(const [field,title] of measured?weekColumns:weekColumns.slice(-1)){
+      const cell=make('td'); cell.dataset.label=title;
+      cell.append(weekValue(day,field)); row.append(cell);
+    }
+    list.append(row);
+  }
+  text('week-status',week.start_date+' 至 '+week.end_date+' · 北京时间');
+  el('week-content').hidden=false;
+  if(focusedDate) list.querySelector('[data-week-date="'+focusedDate+'"]')?.focus({preventScroll:true});
+}
+function resetWeek(){
+  weekGeneration++;
+  weekKey=''; weekLoading=false;
+  el('week-content').hidden=true; el('week-retry').hidden=true;
+  text('week-status','正在读取七日记录…');
+}
+async function loadWeek(force=false){
+  if(!weekPanel.open || !data) return;
+  const day=data.date, revision=activityRevision, key=day+'/'+revision;
+  if(el('day').value!==day) return;
+  if(weekKey===key && (weekLoading || (!force && (day!==data.today || Date.now()-weekCheckedAt<60000)))) return;
+  if(weekKey!==key || force) resetWeek();
+  const generation=++weekGeneration;
+  const current=()=>weekPanel.open && weekGeneration===generation && activityRevision===revision && el('day').value===day;
+  weekLoading=true; weekKey=key; weekCheckedAt=Date.now();
+  try{
+    const week=await request('/api/activity/week?end_date='+encodeURIComponent(day));
+    if(current()){
+      renderWeek(week);
+      el('week-retry').hidden=true;
+    }
+  }catch(error){
+    if(current()){
+      el('week-content').hidden=true; el('week-retry').hidden=false;
+      text('week-status','未能读取 '+day+' 往前七天的记录。');
+    }
+  }finally{
+    if(weekGeneration===generation) weekLoading=false;
+  }
+}
+weekPanel.ontoggle=()=>{
+  if(weekPanel.open) void loadWeek(true);
+  else resetWeek();
+};
+el('week-retry').onclick=()=>{
+  if(data && data.date===el('day').value) void loadWeek(true);
+  else {resetWeek();void refresh()}
+};
 async function refresh() {
   el('open-absence').hidden=!(data && el('day').value===data.date && data.date<data.today);
+  if(weekPanel.open && weekKey && weekKey!==el('day').value+'/'+activityRevision) resetWeek();
   if (loading) { pendingRefresh=true; return; }
   loading=true;
   const day=followToday?'':el('day').value;
@@ -171,8 +314,12 @@ async function refresh() {
     if (unchanged() && activity.status==='fulfilled') {
       data=activity.value; renderActivity();
       el('open-absence').hidden=data.date>=data.today;
+      void loadWeek();
       el('error').hidden=true; text('connection','● 本机已连接 · 数据不上传');
     } else if (unchanged()) {
+      if(weekPanel.open && !weekKey){
+        text('week-status','未能读取所选日期的记录。'); el('week-retry').hidden=false;
+      }
       text('error','暂时无法连接 Orin，图表保留上次数据。'); el('error').hidden=false;
       el('open-absence').hidden=true;
       text('connection','连接中断'); text('current','实时状态不可用');

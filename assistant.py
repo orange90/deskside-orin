@@ -13,6 +13,7 @@ from urllib.request import Request, build_opener, ProxyHandler
 
 import store
 import model_registry
+import dashboard_data
 
 ROOT = store.ROOT
 ASR_HINT = "普通话简体中文。今天坐了多久、站立目标、久坐时长、添加待办、设置提醒。"
@@ -118,6 +119,46 @@ def explicit_tool(query):
     return None
 
 
+WEEK_PERIOD = r"(?:最近|过去|近)(?:的)?(?:[7七]天|[1一](?:周|(?:个)?星期))"
+QUERY_INTRO = (r"(?:请问|请|麻烦)?(?:给我看(?:看)?|帮我(?:看(?:看)?|查(?:询)?)(?:一下)?|"
+               r"告诉我|查看|查询|我想知道|我想看看)?(?:我(?:的)?)?")
+WEEK_REVIEW = r"(?:工位(?:活动)?|活动|坐站)回顾"
+RANGE_HELP = "可以查询单日累计时长，或问「最近七天工位回顾」查看含今天的七天记录。"
+
+
+def week_answer(metrics, now):
+    report = dashboard_data.activity_week(now=now)
+    totals = report["totals"]
+    days = sum(d["recorded_seconds"] > 0 for d in report["days"])
+    presence_days = sum(d["presence_recorded_seconds"] > 0 for d in report["days"])
+    header = f"{report['start_date']} 至 {report['end_date']}（含今天），"
+    if days:
+        header += f"7 天中有 {days} 天留有姿态记录（含未知和隐私时段）。"
+    elif presence_days:
+        header += f"只有 {presence_days} 天留有工位在位记录，未采集姿态。"
+    else:
+        return header + "这段时间没有采集到姿态或在位记录。"
+
+    parts = []
+    for state, label in (("sit", "坐姿"), ("stand", "站姿")):
+        if state in metrics and report["recorded_seconds"]:
+            estimated = report["estimated_" + state]
+            parts.append(f"{label} {elapsed(totals[state])}（含推算 {elapsed(estimated)}）")
+    if "present" in metrics:
+        if report["presence_recorded_seconds"]:
+            coverage = f"（{presence_days} 天有在位记录）" if days else ""
+            parts.append(f"工位在位 {elapsed(totals['present'])}{coverage}")
+        else:
+            parts.append("未采集到在位记录")
+    if "review" in metrics and report["recorded_seconds"]:
+        for state, label in (("away", "离开"), ("privacy", "隐私保护"), ("unknown", "姿态未知")):
+            parts.append(f"{label} {elapsed(totals[state])}")
+    missing = report["elapsed_seconds"] - report["recorded_seconds"]
+    if missing and days:
+        parts.append(f"未采集姿态 {elapsed(missing)}")
+    return header + ("，".join(parts) + "。" if parts else "")
+
+
 def activity_answer(query, now=None):
     # Match a duration/goal attached to a posture, not a character inside
     # an unrelated noun ("车站") or the object of a reminder.
@@ -125,14 +166,44 @@ def activity_answer(query, now=None):
         return None
     duration = r"(?:多久|多长(?:时间)?|(?:多少|几)(?:个)?(?:小时|分钟|秒|时间)|多少(?=[？?。！!\s]*$)|时长|时间(?:是多少|多长))"
     posture_suffix = r"(?:姿(?:势)?|着|立|了|的|累计|总共|一共|总|各|分别|持续)*"
-    combined = re.search(r"(?:坐(?:姿)?(?:和|与|、|跟|及)?站(?:姿|立)?|站(?:姿|立)?(?:和|与|、|跟|及)?坐(?:姿)?)"
-                         + posture_suffix + duration, query)
+    pair = r"(?:坐(?:姿)?(?:和|与|、|跟|及)?站(?:姿|立)?|站(?:姿|立)?(?:和|与|、|跟|及)?坐(?:姿)?)"
+    presence = r"(?:在位|工位|桌前)(?:在位|停留|待|在|了|的|累计|总共|一共|总)*" + duration
+    normalized = re.sub(r"\s+", "", query).strip("？?。！!")
+    match = re.search(WEEK_PERIOD, normalized)
+    if match:
+        # Only an explicit request for local activity may consume a week of records.
+        intro = normalized[:match.start()]
+        if not re.fullmatch(QUERY_INTRO, intro):
+            mixed = r"(?:今天|昨天|前天|本周|上周|\d+月\d+[日号])(?:和|与|、|跟)"
+            return RANGE_HELP if re.fullmatch(QUERY_INTRO + mixed, intro) else None
+        topic = re.sub(r"^(?:里|内)?[，,]?(?:我的|我|的)?", "", normalized[match.end():])
+        topic = re.sub(r"(?:呢|吗)$", "", topic)
+        if re.search(r"写|翻译|提醒|问卷|采访", topic):
+            return None
+        if re.fullmatch(WEEK_REVIEW, topic):
+            return week_answer({"review", "sit", "stand", "present"}, now)
+        topic = re.sub(r"^在(?:桌前|工位)(?=[坐站])", "", topic)
+        measures = [(pair + posture_suffix + duration, {"sit", "stand"}),
+                    ("坐" + posture_suffix + duration, {"sit"}),
+                    ("站" + posture_suffix + duration, {"stand"}), ("(?:在)?" + presence, {"present"})]
+        wanted = set()
+        for phrase in re.split(r"[，,]|(?<=[久间长钟秒时])[、和]", topic):
+            metrics = next((m for pattern, m in measures if re.fullmatch(pattern + r"(?:是多少)?", phrase)), None)
+            if metrics is None:
+                break
+            wanted.update(metrics)
+        else:
+            return week_answer(wanted, now)
+        return RANGE_HELP if re.search(pair + "|" + presence + "|[坐站].*(?:多久|时长)", topic) else None
+    if re.fullmatch(QUERY_INTRO + r"(?:本|这|上|下)(?:周|星期)的?" + WEEK_REVIEW, normalized):
+        return RANGE_HELP
+
+    combined = re.search(pair + posture_suffix + duration, query)
     # Joining punctuation such as "坐了多久、站了多久" works independently.
     sitting = bool(combined or re.search(r"坐" + posture_suffix + duration, query))
     standing = bool(combined or re.search(r"站" + posture_suffix + duration, query)
                     or re.search(r"站(?:立|姿)?(?:的)?(?:目标|进度)", query))
-    present = bool(re.search(r"(?:在位|工位|桌前)(?:在位|停留|待|在|了|的|累计|总共|一共|总)*"
-                             + duration, query))
+    present = bool(re.search(presence, query))
     if not (sitting or standing or present):
         return None
 
@@ -153,11 +224,12 @@ def activity_answer(query, now=None):
         except ValueError:
             return "请给出有效的查询日期。"
     restricted_period = any(word in query for word in
-            ("本周", "这周", "上周", "本月", "上月", "最近", "这几天", "过去", "上个月", "本星期",
+            ("本周", "这周", "上周", "本月", "上月", "最近", "近期", "这几天", "过去", "上个月", "本星期",
              "上午", "下午", "早上", "晚上", "本次", "这次", "这一次", "连续", "到现在", "几点")) or re.search(
-            r"(?:[0-9一二两三四五六七八九十]+点|[0-9]{1,2}:[0-9]{2})", query)
+            r"(?:[0-9几半一二两三四五六七八九十]+(?:点|天|周|(?:个)?星期|个月)|"
+            r"(?:这|上|下)(?:个)?(?:星期|礼拜)|[0-9]{1,2}:[0-9]{2})", query)
     if len(requested) > 1 or restricted_period:
-        return "可查询单日累计时长，请给出一天的日期。"
+        return RANGE_HELP
     day = next(iter(requested), today)
     if day > today:
         return "这一天还没有活动记录。"
