@@ -26,7 +26,7 @@
 <div id="reminder-banner" class="error-banner" hidden><div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><span id="reminder-message" role="status"></span><button id="dismiss-reminder" style="white-space:nowrap;font-size:11px">知道了</button></div></div>
 <header class="heading"><div><h1>让一天的节奏，看得见。</h1><p class="subtitle" id="day-label">坐下专注，起身舒展。你的桌前活动记录。</p></div><div class="date-control"><button id="previous" aria-label="前一天">‹</button><input id="day" type="date" aria-label="查看日期"><button id="next" aria-label="后一天">›</button><button id="today">今天</button></div></header>
 <div class="overview">
-<article class="card metric featured"><div class="metric-label">工位在位 <span>◉</span></div><div class="value" id="present-value">—</div><p>独立在位检测，含姿态未确定的时间</p></article>
+<article class="card metric featured"><div class="metric-label">累计在位时长 <span>◉</span></div><div class="value" id="present-value">—</div><p>所选日期的累计时间，含短时遮挡</p></article>
 <article class="card metric"><div class="metric-label">累计坐姿 <span class="key" style="background:var(--green)"></span></div><div class="value" id="sit-value">—</div><p id="sit-detail">等待活动数据</p></article>
 <article class="card metric"><div class="metric-label">累计站姿 <span class="key" style="background:var(--lime)"></span></div><div class="value" id="stand-value">—</div><p id="stand-detail">等待活动数据</p></article>
 <article class="card metric"><div class="metric-label">离开（模型判断） <span class="key" style="background:var(--away)"></span></div><div class="value" id="away-value">—</div><p id="away-detail">仅统计有效检测区间</p></article>

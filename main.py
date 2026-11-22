@@ -22,7 +22,7 @@ import model_registry
 from dashboard_data import dashboard_snapshot
 from telemetry import monitor
 from assistant import Voice, describe_desk_frames, respond
-from state import OccupiedPosture, AbsenceEvidence, FrameLight, PresenceContinuity, SittingSession, StableState
+from state import PersonTrackEvidence, OccupiedPosture, AbsenceEvidence, FrameLight, PresenceContinuity, SittingSession, StableState
 
 LOG = logging.getLogger("uvicorn.error")
 ROOT = store.ROOT
@@ -134,6 +134,7 @@ def capture_frames():
     presence = StableState()
     continuity = PresenceContinuity()
     estimate = OccupiedPosture()
+    track = PersonTrackEvidence()
     history = deque(maxlen=3)
     cap = None
     last_sample = None
@@ -170,6 +171,7 @@ def capture_frames():
                     review.clear()
                     continuity = PresenceContinuity()
                     estimate = OccupiedPosture()
+                    track = PersonTrackEvidence()
                     person_roi = current_roi
                 if paused:
                     if not was_paused:
@@ -180,6 +182,7 @@ def capture_frames():
                         last_subject_roi = None
                         continuity = PresenceContinuity()
                         estimate = OccupiedPosture()
+                        track = PersonTrackEvidence()
                     ds = ps = present = orientation = "unknown"
                     edge_y = count = region_hint = pose_source = None
                     preview_data = None
@@ -205,6 +208,9 @@ def capture_frames():
                             p = at_desk = "unknown"
                     else:
                         review.clear()
+                    tracked = track.observe(count, strong, vision.overlay.get("keypoints", []), now)
+                    if at_desk == "present" and not tracked:
+                        at_desk, p, pose_source = "unknown", "unknown", None
                     at_desk, presence_source = continuity.update(at_desk, now)
                     ds, ps = desk.update(d, now, .6), posture.update(p, now, 1.2)
                     ps, pose_source = estimate.choose(p, ps, pose_source, at_desk == "present",
@@ -249,6 +255,7 @@ def capture_frames():
                 last_sample = None
                 continuity = PresenceContinuity()
                 estimate = OccupiedPosture()
+                track = PersonTrackEvidence()
             if now - last_db >= 1 or privacy != was_private or not ok:
                 wall = time.time()
                 continuous = bool(last_db and now - last_db < 3 and (ok or was_paused))

@@ -124,6 +124,27 @@ class AbsenceEvidence:
 
 
 @dataclass
+class PersonTrackEvidence:
+    """Require a continuous detector track before starting or renewing presence."""
+    first: float = None
+    last: float = None
+    supported: bool = False
+    samples: int = 0
+
+    def observe(self, count, strong, joints, now):
+        if not count or self.last is None or now - self.last > 0.8:
+            self.first, self.samples, self.supported = None, 0, False
+        self.last = now
+        if not count:
+            return False
+        if self.first is None:
+            self.first = now
+        self.samples += 1
+        self.supported |= bool(strong or sum(j['confidence'] >= .55 for j in joints) >= 3)
+        return self.supported and self.samples >= 3 and now - self.first >= 1.2
+
+
+@dataclass
 class PresenceContinuity:
     """A short visibility gap can retain presence, never the sitting/standing label."""
     last_positive: float = None
