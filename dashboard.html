@@ -10,6 +10,18 @@
 @media(max-width:900px){.sidebar{width:76px;padding:25px 12px}.brand{margin:0 auto 38px}.brand div:last-child,.nav span,.local-note{display:none}.nav a{padding:12px;justify-content:center}.shell{margin-left:76px;padding:25px 20px}.grid-main{grid-template-columns:minmax(0,1fr)}.goal{display:grid;grid-template-columns:1fr 1fr;align-items:center;text-align:left;gap:8px 25px}.goal .ring{grid-column:2;grid-row:1/4;margin:0 auto;width:135px;height:135px}.goal-footer{grid-column:1/3;margin-top:10px}.hardware-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview{gap:10px}.metric{padding:16px;min-height:140px}.metric .value{font-size:25px}.metric .value small{font-size:11px}.lower-grid,.ask-grid{grid-template-columns:1fr}.detail-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:600px){.sidebar{inset:0 0 auto;width:100%;height:62px;padding:9px 16px;flex-direction:row;align-items:center;justify-content:space-between}.brand{margin:0}.brand-icon{width:29px;height:29px;font-size:17px}.brand div:last-child{display:block}.brand b{font-size:17px}.brand small{display:none}.nav{display:flex;gap:0}.nav a{padding:10px}.shell{margin:62px 0 0;padding:22px 16px}.topline{font-size:10px;margin-bottom:20px}.heading{flex-wrap:wrap;gap:15px}h1{font-size:27px}.date-control{width:100%;justify-content:space-between}.overview{grid-template-columns:1fr 1fr}.metric{min-height:139px}.metric .value{font-size:29px}.card{border-radius:14px}.legend{gap:8px;font-size:10px}.section-head{align-items:flex-start;flex-wrap:wrap;gap:12px}.timeline-svg{height:115px}.hardware-grid{gap:10px}.hardware-metric{padding:15px}.hardware-metric .value{font-size:23px}.hardware-bottom{gap:9px 16px}.flow{grid-template-columns:1fr 12px 1fr 12px 1fr;gap:5px}.flow-label{grid-column:1/-1;margin-bottom:4px;display:flex;gap:10px;align-items:baseline}.node{padding:10px 8px;min-height:110px}.node strong{font-size:11px;overflow-wrap:anywhere}.node-type{font-size:9px!important}.node small{font-size:9px}.flow-footer,.chart-caption{flex-wrap:wrap}.detail-grid{grid-template-columns:1fr}.record{grid-template-columns:110px 8px 1fr auto;gap:6px}.record time{font-size:10px}.record .duration{font-size:10px}.note-record{grid-template-columns:83px 1fr;gap:8px}.footer{flex-wrap:wrap}.section-title h2{font-size:17px}.section-title>.muted{font-size:10px}.goal h2{font-size:16px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+.absence-open{margin-top:12px;font-size:12px;padding:5px 10px;color:var(--green)}
+#absence-fields{border:0;min-width:0;margin:0;padding:0}
+.absence-dates{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
+.absence-dates label{font-size:12px}.absence-dates input{display:block;width:100%;min-width:0;margin-top:4px}
+.absence-actions{align-items:center;justify-content:space-between}
+#absence-range{font-size:12px}
+#absence-result:empty{display:none}#absence-result{color:var(--ink)}
+.absence-history{border-top:1px solid var(--line);margin-top:20px;padding-top:16px}
+#absence-batches{list-style:none;margin:6px 0 0;padding:0;font-size:13px}
+#absence-batches li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 0}
+#absence-batches button{flex:none;font-size:12px}
+@media(max-width:400px){#absence-modal{padding:20px}.absence-dates{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -31,7 +43,8 @@
 <article class="card metric"><div class="metric-label">累计站姿 <span class="key" style="background:var(--lime)"></span></div><div class="value" id="stand-value">—</div><p id="stand-detail">等待活动数据</p></article>
 <article class="card metric"><div class="metric-label">离开 <span class="key" style="background:var(--away)"></span></div><div class="value" id="away-value">—</div><p id="away-detail">仅统计有效检测区间</p></article>
 </div>
-<div class="grid-main"><article class="card timeline-wrap"><div class="section-head"><div><h2>一天的活动轨迹</h2><p class="muted">北京时间 · 悬停或点按查看时间段</p></div><div class="legend" id="legend"></div></div><svg class="timeline-svg" id="timeline-chart" viewBox="0 0 760 130" role="img" aria-label="全天坐站及在位时间轴"></svg><div class="chart-divider"></div><div class="section-head" style="margin-bottom:10px"><h3>每小时活动构成</h3><span class="muted">分钟 / 小时</span></div><svg id="hour-chart" class="chart-svg" viewBox="0 0 760 150" role="img" aria-label="每小时坐姿、站姿、离开、未知和隐私保护分钟数"></svg><div class="chart-caption"><span id="coverage">等待记录</span><span>柱状图含全部状态 · 空白为无记录或未发生</span></div></article>
+<div class="grid-main"><article class="card timeline-wrap"><div class="section-head"><div><h2>一天的活动轨迹</h2><p class="muted">北京时间 · 悬停或点按查看时间段</p></div><div class="legend" id="legend"></div></div><svg class="timeline-svg" id="timeline-chart" viewBox="0 0 760 130" role="img" aria-label="全天坐站及在位时间轴"></svg><div class="chart-divider"></div><div class="section-head" style="margin-bottom:10px"><h3>每小时活动构成</h3><span class="muted">分钟 / 小时</span></div><svg id="hour-chart" class="chart-svg" viewBox="0 0 760 150" role="img" aria-label="每小时坐姿、站姿、离开、未知和隐私保护分钟数"></svg><div class="chart-caption"><span id="coverage">等待记录</span><span>柱状图含全部状态 · 空白为无记录或未发生</span></div>
+<button id="open-absence" class="absence-open" type="button" aria-haspopup="dialog" hidden>确认本人离开…</button></article>
 <article class="card goal"><h2>站立目标</h2><div class="ring"><svg viewBox="0 0 120 120" aria-label="站立目标完成比例"><circle cx="60" cy="60" r="50" fill="none" stroke="#edf1e7" stroke-width="9"/><circle id="goal-arc" cx="60" cy="60" r="50" fill="none" stroke="#91b96b" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 314.16"/></svg><div class="ring-center"><strong id="goal-percent">—</strong><span id="goal-minutes">等待数据</span></div></div><div><p id="goal-message" style="font-size:12px">记录每一次起身</p><div class="current-box"><span class="current-icon">◷</span><div><b id="current">正在读取实时状态</b><p id="current-detail">摄像头状态</p></div></div></div><div class="goal-footer" id="privacy-total">隐私保护与未知时段单独统计</div></article></div>
 <section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><button id="live-toggle">开启实时画面</button></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div></div></section>
 <section id="hardware" class="section-block"><div class="section-title"><div><h2>设备的实时脉搏</h2><p>独立实时数据 · 最近 15 分钟趋势 · 每 15 秒采样</p></div><span class="muted" id="hardware-updated">等待采样</span></div><div class="hardware-grid">
@@ -49,6 +62,19 @@
 <details id="settings-panel" class="card details" style="margin-top:20px"><summary>目标设置与摄像头选区</summary><form id="settings" class="settings-grid"><label>每日站立目标 / 分钟<input id="stand" type="number" min="1" max="1440" required></label><label>连续久坐提醒 / 分钟<input id="sit" type="number" min="1" max="1440" required></label><button class="primary">保存设置</button></form><div class="calibration"><p>坐站使用相对姿态估计，无需贴标或记录固定高度。桌沿档位校准可选。预览中点击两个对角可设置选区。</p><button id="show">查看当前画面</button><select id="region" aria-label="摄像头选区类型"><option value="person">桌前人物区域</option><option value="cosmos">Cosmos 摘要区域</option><option value="desk">桌沿区域</option></select><div><img id="frame" hidden alt="当前本机摄像头画面"></div><button data-point="low">记录桌低档</button><button data-point="high">记录桌高档</button></div></details>
 <footer class="footer"><span>桌间 · DESKSIDE &nbsp; / &nbsp; 本地感知，安静陪伴</span><span id="updated">图表每 15 秒静默更新 · 历史数据保留</span></footer>
 </main><div id="tooltip" class="tooltip" role="tooltip" hidden></div><div id="toast" class="toast" role="status" hidden></div>
+<dialog id="absence-modal" class="modal" aria-labelledby="absence-title" aria-describedby="absence-description">
+  <div class="modal-head"><h2 id="absence-title">确认本人离开</h2><button id="close-absence" type="button" aria-label="关闭校正窗口">×</button></div>
+  <p id="absence-description">选择你全天未到工位的日期，可连续选 1 至 31 天，按北京时间计算。已采集的个人活动按离开统计。隐私时段、采集空档和原始记录均保留。</p>
+  <form id="absence-form"><fieldset id="absence-fields">
+    <div class="absence-dates">
+      <label>开始日期<input type="date" id="absence-start" required></label>
+      <label>结束日期（含当天）<input type="date" id="absence-end" required></label>
+    </div>
+    <div class="modal-actions absence-actions"><span id="absence-range" aria-live="polite"></span><button class="primary" id="apply-absence">确认离开</button></div>
+  </fieldset></form>
+  <p id="absence-result" role="status"></p>
+  <section class="absence-history"><h3 id="absence-history-title"></h3><ul id="absence-batches"></ul></section>
+</dialog>
 <dialog id="model-modal" class="modal"><div class="modal-head"><div><span class="eyebrow">LOCAL MODEL</span><h2 id="model-title"></h2></div><button id="close-model" aria-label="关闭">×</button></div><p id="model-description"></p><form id="model-form"><div id="model-options"></div><p id="model-notice"></p><div class="modal-actions"><button type="button" id="cancel-model">关闭</button><button class="primary" id="apply-model">应用模型</button></div></form><p id="model-result" role="status"></p></dialog>
 <script>
 'use strict';
@@ -58,10 +84,17 @@ const at=t=>new Date(t*1000).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai
 const precise=t=>new Date(t*1000).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
 const duration=s=>{s=Math.max(0,Math.round(s||0));return s>=3600?`${Math.floor(s/3600)} 小时 ${Math.floor(s%3600/60)} 分`:s>=60?`${Math.floor(s/60)} 分 ${s%60} 秒`:`${s} 秒`};
 const durationHTML=s=>{s=Math.max(0,Math.round(s||0));return s>=3600?`${Math.floor(s/3600)}<small>时</small>${Math.floor(s%3600/60)}<small>分</small>`:s>0&&s<60?`${s}<small>秒</small>`:`${Math.floor(s/60)}<small>分</small>`};
-let followToday=true, pendingRefresh=false;
+let followToday=true, pendingRefresh=false, activityRevision=0;
 let liveActive=false,liveBusy=false,liveEpoch=0;
 let data=null, hardware=null, catalog=null, selectedKind='person',selectedNote='cosmos',intervalLimit=20,noteLimit=12,recording=false,corner=null,loading=false,modelComponent=null,toastTimer;
-async function request(path,body){const response=await fetch(path,{cache:'no-store',...(body===undefined?{signal:AbortSignal.timeout(path==='/api/live/frame'?3500:10000)}:{}),...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});const result=await response.json();if(!response.ok)throw Error(typeof result.detail==='string'?result.detail:'本机请求失败');return result}
+async function request(path,body,timeout){
+  const options={cache:'no-store'};
+  if(body!==undefined) Object.assign(options,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(timeout || body===undefined) options.signal=AbortSignal.timeout(timeout || (path==='/api/live/frame'?3500:10000));
+  const response=await fetch(path,options), result=await response.json();
+  if(!response.ok) throw Object.assign(Error(typeof result.detail==='string'?result.detail:'本机请求失败'),{status:response.status});
+  return result;
+}
 function text(id,value){el(id).textContent=value}
 function notify(message){text('toast',message);el('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el('toast').hidden=true,4500)}
 function empty(container,message){const p=document.createElement('p');p.className='empty';p.textContent=message;container.replaceChildren(p)}
@@ -125,19 +158,23 @@ function kv(container,entries,unit=''){container.replaceChildren(...entries.map(
 function drawDisk(h){const svg=el('disk-chart');svg.replaceChildren();if(!h.disk_total_gib)return;const values=[['已使用',h.disk_used_gib,'#28634c'],['可用空间',h.disk_free_gib,'#bcd890'],['文件系统保留',Math.max(0,h.disk_total_gib-h.disk_used_gib-h.disk_free_gib),'#da9560']];let offset=0;const circumference=2*Math.PI*49;values.forEach(([label,value,color])=>{const length=value/h.disk_total_gib*circumference;const circle=svgNode('circle',{cx:60,cy:60,r:49,fill:'none',stroke:color,'stroke-width':14,'stroke-dasharray':`${length} ${circumference-length}`,'stroke-dashoffset':-offset});tooltip(circle,`${label} ${value.toFixed(1)} GiB · ${(value/h.disk_total_gib*100).toFixed(1)}%`);svg.append(circle);offset+=length});text('disk-free',h.disk_free_gib.toFixed(1));text('disk-total',`总容量 ${h.disk_total_gib.toFixed(1)} GiB`);el('disk-legend').replaceChildren(...values.map(([label,value,color])=>{const d=make('div'),l=make('div','disk-label'),k=make('span','key');k.style.background=color;l.append(k,document.createTextNode(label));d.append(l,make('strong','',value.toFixed(1)+' GiB'),make('small','',(value/h.disk_total_gib*100).toFixed(1)+'%'));return d}))}
 function renderHardware(){const h=hardware.latest;if(!h){text('hardware-updated','正在等待首个硬件样本');return}drawDisk(h);const rows=hardware.history.filter(r=>r.at>=h.at-900),metric=(id,value,unit)=>el(id).innerHTML=Number.isFinite(value)?`${value.toFixed(1)}<small>${unit}</small>`:'<small>不可用</small>';metric('gpu-value',h.gpu_pct,'%');metric('ram-value',h.ram_used_gib,'GiB');metric('cpu-value',h.cpu_pct,'%');metric('temp-value',h.temp_c,'°C');spark('gpu-spark',rows,'gpu_pct',100,'#28634c');spark('ram-spark',rows,'ram_used_gib',h.ram_total_gib||64,'#749958');spark('cpu-spark',rows,'cpu_pct',100,'#6b8d80');spark('temp-spark',rows,'temp_c',100,'#ca8b57');text('gpu-sub',Number.isFinite(h.gpu_mhz)?`GPU 频率 ${h.gpu_mhz.toFixed(0)} MHz`:'GPU 频率不可用');text('ram-sub',Number.isFinite(h.ram_total_gib)?`总计 ${h.ram_total_gib.toFixed(1)} GiB · 可用 ${h.ram_available_gib.toFixed(1)} GiB`:'内存读数不可用');text('cpu-sub',`在线核心 ${h.cpu_online||'不可用'} · 1 分钟负载 ${h.load?.[0]?.toFixed(2)??'—'}`);const temps=Object.entries(h.temperatures||{});text('temp-sub',temps.length?`${temps.length} 个传感器 · 最高值`:'温度传感器不可用');text('hardware-updated',`采样 ${precise(h.at)}${Date.now()/1000-h.at>45?' · 样本已过期':''}`);const parts=[['Swap',Number.isFinite(h.swap_used_gib)?h.swap_used_gib.toFixed(2)+' GiB':'不可用'],['磁盘剩余',Number.isFinite(h.disk_free_gib)?h.disk_free_gib.toFixed(1)+' GiB':'不可用'],['运行时长',h.uptime_s?duration(h.uptime_s):'不可用'],['Qwen',h.services?.Qwen?'就绪':'未就绪'],['Cosmos',h.services?.Cosmos?'就绪':'未就绪']];el('hardware-summary').replaceChildren(...parts.map(([k,v])=>{const span=make('span','',k+' ');span.append(make('b','',v));return span}));kv(el('power-detail'),Object.entries(h.power_rails_w||{}).map(([k,v])=>[k,v.toFixed(2)]),' W');kv(el('temp-detail'),temps.map(([k,v])=>[k,v.toFixed(1)]),' °C');el('cpu-cores').replaceChildren(...(h.cpu_cores||[]).map((v,i)=>make('span','core',`${i} · ${v===null?'离线':v+'%'}`)));kv(el('service-detail'),[['视觉服务',data?.camera?.ready?(data.camera.vision_paused?'采集暂停':'运行中'):'未就绪'],['风扇',Object.values(h.fan_rpm||{}).length?Object.values(h.fan_rpm).join(' / ')+' RPM':'转速不可用'],['磁盘总量',Number.isFinite(h.disk_total_gib)?h.disk_total_gib.toFixed(1)+' GiB':'不可用']])}
 async function refresh() {
+  el('open-absence').hidden=!(data && el('day').value===data.date && data.date<data.today);
   if (loading) { pendingRefresh=true; return; }
   loading=true;
   const day=followToday?'':el('day').value;
-  const unchanged=()=>day===(followToday?'':el('day').value);
+  const revision=activityRevision;
+  const unchanged=()=>revision===activityRevision && day===(followToday?'':el('day').value);
   try {
     const [activity, hw, models]=await Promise.allSettled([
       request('/api/dashboard'+(day?'?date='+day:'')),request('/api/hardware'),request('/api/models')
     ]);
     if (unchanged() && activity.status==='fulfilled') {
       data=activity.value; renderActivity();
+      el('open-absence').hidden=data.date>=data.today;
       el('error').hidden=true; text('connection','● 本机已连接 · 数据不上传');
     } else if (unchanged()) {
       text('error','暂时无法连接 Orin，图表保留上次数据。'); el('error').hidden=false;
+      el('open-absence').hidden=true;
       text('connection','连接中断'); text('current','实时状态不可用');
       text('current-detail','等待重新连接'); text('vision-flow-status','连接中断');
       el('show').disabled=true; el('frame').hidden=true; el('frame').removeAttribute('src'); corner=null;
@@ -159,6 +196,123 @@ async function refresh() {
   } finally {
     loading=false;
     if(pendingRefresh){pendingRefresh=false;void refresh()}
+  }
+}
+const absenceModal=el('absence-modal'), absenceStart=el('absence-start'), absenceEnd=el('absence-end');
+let absenceDay='', absenceRead=0, absenceSaving=false, absenceAttempt=null;
+
+function absenceRangeLabel(batch){
+  return batch.start_date===batch.end_date ? batch.start_date : batch.start_date+' 至 '+batch.end_date;
+}
+function updateAbsenceRange(){
+  const days=(absenceEnd.valueAsNumber-absenceStart.valueAsNumber)/86400000+1;
+  const valid=Number.isInteger(days) && days>=1 && days<=31 &&
+    absenceStart.value>=absenceStart.min && absenceEnd.value<=absenceEnd.max;
+  let hint='请选择起止日期';
+  if(Number.isFinite(days)){
+    if(absenceStart.value<absenceStart.min) hint='看板记录始于 '+absenceStart.min;
+    else if(days<1) hint='结束日期须在开始日期当天或之后';
+    else if(absenceEnd.value>absenceEnd.max) hint='请选择昨天或更早的日期';
+    else if(days>31) hint='一次最多选择 31 天';
+    else hint='共 '+days+' 天';
+  }
+  text('absence-range',hint);
+  el('apply-absence').disabled=!valid;
+  return valid;
+}
+function setAbsenceSaving(saving){
+  absenceSaving=saving;
+  el('open-absence').disabled=saving;
+  el('absence-fields').disabled=saving;
+  el('absence-batches').querySelectorAll('button').forEach(button=>button.disabled=saving);
+}
+async function loadAbsences(day){
+  const generation=++absenceRead, list=el('absence-batches');
+  const current=()=>absenceModal.open && generation===absenceRead;
+  text('absence-history-title',day+' 的看板校正');
+  list.replaceChildren(make('li','muted','正在读取…'));
+  try{
+    const {batches}=await request('/api/absences?date='+encodeURIComponent(day));
+    if(!current()) return;
+    list.replaceChildren();
+    for(const batch of batches){
+      const row=make('li'), label=absenceRangeLabel(batch);
+      const undo=make('button','','撤销整段');
+      undo.type='button'; undo.disabled=absenceSaving;
+      undo.setAttribute('aria-label','撤销 '+label+' 的离开校正');
+      undo.onclick=()=>changeAbsence(batch);
+      row.append(make('span','mono',label),undo);
+      list.append(row);
+    }
+    if(!batches.length) list.append(make('li','muted','这一天没有可撤销的看板校正。'));
+  }catch(error){
+    if(!current()) return;
+    const row=make('li','','校正记录读取失败。'), retry=make('button','','重试');
+    retry.type='button'; retry.onclick=()=>loadAbsences(day);
+    row.append(retry); list.replaceChildren(row);
+  }
+}
+el('open-absence').onclick=()=>{
+  if(absenceSaving || !data || data.date!==el('day').value || data.date>=data.today) return;
+  absenceDay=data.date;
+  const yesterday=new Date(Date.parse(data.today+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+  for(const input of [absenceStart,absenceEnd]){
+    input.min=data.first_date;
+    input.max=yesterday;
+    input.value=absenceDay;
+  }
+  updateAbsenceRange();
+  text('absence-result','');
+  absenceModal.showModal();
+  void loadAbsences(absenceDay);
+};
+el('close-absence').onclick=()=>absenceModal.close();
+absenceStart.oninput=absenceEnd.oninput=updateAbsenceRange;
+absenceStart.onchange=()=>{
+  if(absenceStart.validity.valid && absenceStart.value!==absenceDay){
+    absenceDay=absenceStart.value;
+    void loadAbsences(absenceDay);
+  }
+};
+el('absence-form').onsubmit=event=>{
+  event.preventDefault();
+  if(updateAbsenceRange()) void changeAbsence();
+};
+async function changeAbsence(undoBatch){
+  if(absenceSaving) return;
+  const range=undoBatch || {start_date:absenceStart.value,end_date:absenceEnd.value};
+  setAbsenceSaving(true);
+  text('absence-result',undoBatch?'正在撤销…':'正在保存…');
+  try{
+    if(undoBatch){
+      await request('/api/absences/'+encodeURIComponent(undoBatch.batch_id)+'/undo',{},10000);
+    }else{
+      // Keep the id for a retry if the first response is lost.
+      if(absenceAttempt?.start_date!==range.start_date || absenceAttempt?.end_date!==range.end_date)
+        absenceAttempt={...range,request_id:crypto.randomUUID()};
+      await request('/api/absences',absenceAttempt,10000);
+    }
+    absenceAttempt=null;
+    activityRevision++;
+    const message=(undoBatch?'已撤销离开校正 · ':'已确认本人离开 · ')+absenceRangeLabel(range);
+    if(absenceModal.open){
+      text('absence-result',message);
+      if(el('day').value<range.start_date || el('day').value>range.end_date){
+        absenceDay=range.start_date;
+        el('day').value=absenceDay;
+        followToday=false;
+        intervalLimit=20; noteLimit=12;
+      }
+    }else notify(message);
+    void refresh();
+  }catch(error){
+    const message=error.status ? error.message : '未收到操作结果，请核对下方记录后重试。';
+    if(error.status) absenceAttempt=null;
+    if(absenceModal.open) text('absence-result',message);
+    else notify(message);
+  }finally{
+    setAbsenceSaving(false);
+    if(absenceModal.open) void loadAbsences(absenceDay);
   }
 }
 function changeDay(delta){if(!el('day').value)return;followToday=false;const d=new Date(el('day').value+'T12:00:00+08:00');d.setUTCDate(d.getUTCDate()+delta);el('day').value=d.toISOString().slice(0,10);intervalLimit=20;noteLimit=12;refresh()}

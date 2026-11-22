@@ -466,6 +466,12 @@ class Settings(BaseModel):
     sit_minutes: int = Field(ge=1, le=1440)
 
 
+class AbsenceRange(BaseModel):
+    start_date: str
+    end_date: str
+    request_id: uuid.UUID | None = None
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return (ROOT / "dashboard.html").read_text()
@@ -532,6 +538,33 @@ def dashboard_history(date: str | None = None):
         return {**dashboard_snapshot(date), "camera": camera_view(), "recording": bool(voice.recording)}
     except ValueError:
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+
+
+@app.get("/api/absences")
+def absence_history(date: str):
+    try:
+        return {"batches": store.list_absences(date)}
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/absences")
+def confirm_absence(item: AbsenceRange):
+    try:
+        return store.create_absence(item.start_date, item.end_date, item.request_id)
+    except store.AbsenceConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/absences/{batch_id}/undo")
+def remove_absence(batch_id: str):
+    try:
+        store.undo_absence(batch_id)
+    except KeyError:
+        raise HTTPException(404, "找不到该次离开校正") from None
+    return {"ok": True}
 
 
 @app.get("/api/live/frame")

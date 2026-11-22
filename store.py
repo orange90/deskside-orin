@@ -4,8 +4,9 @@ from activity_annotations import apply_annotations
 from posture_continuity import bridge_posture_gaps, MAX_GAP_SECONDS
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, time as day_time, timedelta
 from pathlib import Path
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
@@ -17,6 +18,7 @@ def database():
     db = sqlite3.connect(ROOT / "data.sqlite3", timeout=5)
     db.row_factory = sqlite3.Row
     try:
+        db.execute("PRAGMA foreign_keys=ON")
         with db:
             yield db
     finally:
@@ -42,6 +44,15 @@ def initialize():
                 state TEXT NOT NULL CHECK(state IN ('sit','stand','away')),
                 reason TEXT NOT NULL, created REAL NOT NULL,
                 CHECK(end>start));
+            CREATE TABLE IF NOT EXISTS absence_batches (
+                batch_id TEXT PRIMARY KEY, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+                undone INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS absence_days (
+                annotation_id INTEGER PRIMARY KEY REFERENCES activity_annotations(id) ON DELETE CASCADE,
+                batch_id TEXT NOT NULL REFERENCES absence_batches(batch_id));
+            CREATE INDEX IF NOT EXISTS absence_days_batch ON absence_days(batch_id);
+            CREATE TABLE IF NOT EXISTS absence_requests (
+                request_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES absence_batches(batch_id));
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY, value INTEGER NOT NULL);
             INSERT OR IGNORE INTO settings VALUES ('stand_minutes', 60), ('sit_minutes', 50);
@@ -181,3 +192,88 @@ def annotate_activity(start, end, state, reason):
         cursor = db.execute('INSERT INTO activity_annotations(start,end,state,reason,created) VALUES (?,?,?,?,?)',
                             (start,end,state,reason,time.time()))
         return cursor.lastrowid
+
+
+class AbsenceConflict(Exception):
+    pass
+
+
+def _calendar_date(value):
+    try:
+        day = date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise ValueError("日期格式应为 YYYY-MM-DD") from None
+    if day.isoformat() != value:
+        raise ValueError("日期格式应为 YYYY-MM-DD")
+    return day
+
+
+def list_absences(day):
+    _calendar_date(day)
+    with database() as db:
+        return [dict(row) for row in db.execute(
+            "SELECT batch_id,start_date,end_date FROM absence_batches "
+            "WHERE undone=0 AND start_date<=? AND end_date>=? ORDER BY start_date", (day, day))]
+
+
+def create_absence(start_date, end_date, request_id=None, now=None):
+    first, last = _calendar_date(start_date), _calendar_date(end_date)
+    now = (now or datetime.now(TZ)).astimezone(TZ)
+    if last < first or (last - first).days >= 31:
+        raise ValueError("请选择连续的 1 至 31 天")
+    if last >= now.date():
+        raise ValueError("只能校正北京时间已结束的日期")
+    # Calendar midnights also handle historical offset changes in Shanghai.
+    boundaries = [datetime.combine(first + timedelta(days=i), day_time.min, TZ).timestamp()
+                  for i in range((last - first).days + 2)]
+    request_id = str(request_id) if request_id is not None else None
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if request_id is not None:
+            previous = db.execute(
+                "SELECT b.* FROM absence_requests r JOIN absence_batches b USING(batch_id) "
+                "WHERE r.request_id=?", (request_id,)).fetchone()
+            if previous:
+                if previous['start_date'] != start_date or previous['end_date'] != end_date:
+                    raise AbsenceConflict("该请求编号已用于其他日期")
+                if previous['undone']:
+                    raise AbsenceConflict("该次校正已撤销，请重新选择日期后提交")
+                return dict(batch_id=previous['batch_id'], start_date=start_date, end_date=end_date)
+
+        overlap = db.execute(
+            "SELECT batch_id,start_date,end_date FROM absence_batches "
+            "WHERE undone=0 AND start_date<=? AND end_date>=? LIMIT 1",
+            (end_date, start_date)).fetchone()
+        if overlap:
+            if overlap['start_date'] != start_date or overlap['end_date'] != end_date:
+                raise AbsenceConflict(f"与已有离开校正重叠（{overlap['start_date']} 至 {overlap['end_date']}）")
+            batch_id = overlap['batch_id']
+        else:
+            conflict = db.execute(
+                "SELECT start FROM activity_annotations WHERE start<? AND end>? AND state IN ('sit','stand') "
+                "ORDER BY start LIMIT 1", (boundaries[-1], boundaries[0])).fetchone()
+            if conflict:
+                day = datetime.fromtimestamp(max(conflict['start'], boundaries[0]), TZ).date()
+                raise AbsenceConflict(f"{day} 已有人工坐姿或站姿标注，请调整日期范围")
+            batch_id = str(uuid4())
+            db.execute("INSERT INTO absence_batches(batch_id,start_date,end_date) VALUES (?,?,?)",
+                       (batch_id, start_date, end_date))
+            for left, right in zip(boundaries, boundaries[1:]):
+                annotation = db.execute(
+                    "INSERT INTO activity_annotations(start,end,state,reason,created) "
+                    "VALUES (?,?,'away',?,?)", (left, right, "本人确认全天未到工位", now.timestamp()))
+                db.execute("INSERT INTO absence_days(annotation_id,batch_id) VALUES (?,?)",
+                           (annotation.lastrowid, batch_id))
+        if request_id is not None:
+            db.execute("INSERT INTO absence_requests(request_id,batch_id) VALUES (?,?)", (request_id, batch_id))
+        return dict(batch_id=batch_id, start_date=start_date, end_date=end_date)
+
+
+def undo_absence(batch_id):
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if not db.execute("SELECT 1 FROM absence_batches WHERE batch_id=?", (batch_id,)).fetchone():
+            raise KeyError("找不到该次离开校正")
+        db.execute("DELETE FROM activity_annotations WHERE id IN "
+                   "(SELECT annotation_id FROM absence_days WHERE batch_id=?)", (batch_id,))
+        db.execute("UPDATE absence_batches SET undone=1 WHERE batch_id=?", (batch_id,))
