@@ -111,16 +111,14 @@ def dashboard_snapshot(day=None, now=None):
             'annotations': annotations, 'notes': group_notes(notes, rows), 'raw_note_count': len(notes), 'active_reminders': reminders, 'settings': settings, 'tasks': tasks}
 
 
-def _activity_day(db, day, now):
-    start = datetime.combine(day, time.min, store.TZ).timestamp()
-    cutoff = (now.timestamp() if day == now.date()
-              else datetime.combine(day + timedelta(days=1), time.min, store.TZ).timestamp())
-    rows, _ = store.activity_window(db, start, cutoff, now.timestamp())
+def _activity_summary(db, start, cutoff, as_of, *, presence_breakdown=False):
+    rows, _ = store.activity_window(db, start, cutoff, as_of)
     totals = dict.fromkeys(('sit', 'stand', 'away', 'unknown', 'privacy', 'present'), 0)
     totals.update(store.activity_totals(rows))
     coverage = {'person': 0.0, 'presence': 0.0}
     manual = {'person': 0.0, 'presence': 0.0}
     estimates = {'sit': 0.0, 'stand': 0.0}
+    presence_states = {'unknown': 0.0, 'privacy': 0.0} if presence_breakdown else {}
     for row in rows:
         if row['kind'] not in coverage:
             continue
@@ -130,11 +128,49 @@ def _activity_day(db, day, now):
             manual[row['kind']] += duration
         if row['kind'] == 'person' and row.get('source') in {'estimated', 'continuity'}:
             estimates[row['state']] += duration
-    return {'date': day.isoformat(), 'totals': totals,
+        if row['kind'] == 'presence' and row['state'] in presence_states:
+            presence_states[row['state']] += duration
+    return {'totals': totals,
+            **{f'presence_{state}_seconds': round(seconds) for state, seconds in presence_states.items()},
             'estimated_sit': round(estimates['sit']), 'estimated_stand': round(estimates['stand']),
             'manual_seconds': round(manual['person']), 'manual_presence_seconds': round(manual['presence']),
             'recorded_seconds': round(coverage['person']),
             'presence_recorded_seconds': round(coverage['presence']), 'elapsed_seconds': round(cutoff - start)}
+
+
+def _activity_day(db, day, now):
+    start = datetime.combine(day, time.min, store.TZ).timestamp()
+    cutoff = (now.timestamp() if day == now.date()
+              else datetime.combine(day + timedelta(days=1), time.min, store.TZ).timestamp())
+    return {'date': day.isoformat(), **_activity_summary(db, start, cutoff, now.timestamp())}
+
+
+def _minute_timestamp(text):
+    try:
+        value = datetime.fromisoformat(text) if isinstance(text, str) and len(text) == 16 else None
+    except ValueError:
+        value = None
+    if value is None or value.isoformat(timespec='minutes') != text:
+        raise ValueError('时间请使用北京时间 YYYY-MM-DDTHH:MM')
+    local = value.replace(tzinfo=store.TZ)
+    if local.replace(fold=1).utcoffset() > local.utcoffset():
+        raise ValueError('该本地时间不存在')
+    return local.timestamp()
+
+
+def activity_range(start_text, end_text, now=None):
+    """Summarize a half-open Beijing-time window on the daily report's observation clocks."""
+    start, end = _minute_timestamp(start_text), _minute_timestamp(end_text)
+    if not 0 < end - start <= 86400:
+        raise ValueError('结束时间须晚于开始时间，且时段不能超过 24 小时')
+    now = now or datetime.now(store.TZ)
+    as_of = (now if now.tzinfo else now.replace(tzinfo=store.TZ)).timestamp()
+    if end > as_of:
+        raise ValueError('结束时间不能晚于当前时间')
+    with store.database() as db:
+        db.execute('BEGIN')
+        return {'start': start_text, 'end': end_text,
+                **_activity_summary(db, start, end, as_of, presence_breakdown=True)}
 
 
 def activity_week(end_date=None, now=None):

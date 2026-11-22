@@ -27,7 +27,7 @@ import reminder_queue
 import interval_corrections
 import activity_evidence
 import model_registry
-from dashboard_data import activity_week, captured_idea_day, daily_ideas_markdown, dashboard_snapshot, weekly_markdown
+from dashboard_data import activity_range, activity_week, captured_idea_day, daily_ideas_markdown, dashboard_snapshot, weekly_markdown
 from telemetry import monitor
 from assistant import Voice, describe_desk_frames, idea_body, respond
 from state import (POSE_METHODS, AbsenceEvidence, FrameLight, OccupiedPosture, PersonTrackEvidence,
@@ -906,6 +906,14 @@ def dashboard_history(date: str | None = None):
 def interval_evidence(date: str, start: float, end: float):
     try:
         return activity_evidence.details(date, start, end)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/api/activity/range")
+def range_activity(start: str, end: str):
+    try:
+        return activity_range(start, end)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 

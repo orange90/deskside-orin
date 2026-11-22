@@ -130,7 +130,133 @@ WEEK_PERIOD = r"(?:最近|过去|近)(?:的)?(?:[7七]天|[1一](?:周|(?:个)?�
 QUERY_INTRO = (r"(?:请问|请|麻烦)?(?:给我看(?:看)?|帮我(?:看(?:看)?|查(?:询)?)(?:一下)?|"
                r"告诉我|查看|查询|我想知道|我想看看)?(?:我(?:的)?)?")
 WEEK_REVIEW = r"(?:工位(?:活动)?|活动|坐站)回顾"
-RANGE_HELP = "可以查询单日累计时长，或问「最近七天工位回顾」查看含今天的七天记录。"
+RANGE_HELP = "可以查询单日累计时长，也可以问「昨天9点到11点我坐了多久」或「最近七天工位回顾」。"
+DURATION = r"(?:多久|多长(?:时间)?|(?:多少|几)(?:个)?(?:小时|分钟|秒|时间)|多少(?=[？?。！!\s]*$)|时长|时间(?:是多少|多长))"
+POSTURE_SUFFIX = r"(?:姿(?:势)?|着|立|了|的|累计|总共|一共|总|各|分别|持续)*"
+POSTURE_PAIR = r"(?:坐(?:姿)?(?:和|与|、|跟|及)?站(?:姿|立)?|站(?:姿|立)?(?:和|与|、|跟|及)?坐(?:姿)?)"
+PRESENCE = r"(?:在位|工位|桌前)(?:在位|停留|待|在|了|的|累计|总共|一共|总)*" + DURATION
+
+
+def period_metrics(topic):
+    topic = re.sub(r"^(?:里|内)?[，,。]?(?:我的|我|的)?", "", topic)
+    topic = re.sub(r"(?:呢|吗)$", "", topic)
+    if re.fullmatch(WEEK_REVIEW, topic):
+        return {"review", "sit", "stand", "present"}
+    topic = re.sub(r"^在(?:桌前|工位)(?=[坐站])", "", topic)
+    measures = [(POSTURE_PAIR + POSTURE_SUFFIX + DURATION, {"sit", "stand"}),
+                ("坐" + POSTURE_SUFFIX + DURATION, {"sit"}),
+                ("站" + POSTURE_SUFFIX + DURATION, {"stand"}), ("(?:在)?" + PRESENCE, {"present"})]
+    wanted = set()
+    for phrase in re.split(r"[，,]|(?<=[久间长钟秒时])[、和]", topic):
+        metrics = next((m for pattern, m in measures if re.fullmatch(pattern + r"(?:是多少)?", phrase)), None)
+        if metrics is None:
+            return None
+        wanted.update(metrics)
+    return wanted
+
+
+CLOCK_NUMBER = r"(?:[0-9]{1,2}|[零一二两三四五六七八九十]{1,3})"
+DAYPART = r"(?:凌晨|早上|上午|中午|下午|晚上)"
+CLOCK = rf"(?:{DAYPART})?(?:[0-9]{{1,2}}[:：][0-9]{{2}}|{CLOCK_NUMBER}[点时](?:半|{CLOCK_NUMBER}分?)?)"
+CLOCK_DAY = r"(?:今天|昨天|前天|明天|[0-9]{4}-[0-9]{2}-[0-9]{2})"
+CLOCK_SEPARATOR = r"(?:到|至|[~～])"
+CLOCK_RANGE = re.compile(QUERY_INTRO + rf"(?:从|在)?(?P<day>{CLOCK_DAY})?T?(?P<start>{CLOCK})"
+                         + CLOCK_SEPARATOR + rf"(?P<end_day>{CLOCK_DAY}|次日|第二天)?T?(?P<end>{CLOCK})(?P<topic>.+)")
+
+
+def clock_time(text, inherited):
+    part = re.match(DAYPART, text)
+    clock = text[part.end():] if part else text
+    if ':' in clock or '：' in clock:
+        hour, minute = map(int, re.split('[:：]', clock))
+    else:
+        hours, minutes = re.split('[点时]', clock)
+        hour = short_number(hours)
+        minutes = minutes.removesuffix('分')
+        minute = 30 if minutes == '半' else short_number(minutes.lstrip('零') or '零')
+    if hour is None or minute is None or hour > 23 or minute > 59:
+        raise ValueError
+    marker = part[0] if part else None
+    if not marker and 1 <= hour <= 12:
+        marker = inherited
+    if marker == '晚上' and (hour < 5 or hour == 12):
+        raise ValueError
+    if marker in ('下午', '晚上', '中午') and 1 <= hour < 12 and not (marker == '中午' and hour == 11):
+        hour += 12
+    elif marker == '凌晨' and hour == 12:
+        hour = 0
+    if ((marker in ('上午', '早上', '凌晨') and hour > 12)
+            or (marker == '中午' and not 11 <= hour <= 14)
+            or (marker in ('下午', '晚上') and hour < 12)):
+        raise ValueError
+    return hour, minute, marker
+
+
+def clock_date(token, today):
+    offsets = {'前天': -2, '昨天': -1, '今天': 0, '明天': 1}
+    return today + timedelta(days=offsets[token]) if token in offsets else date.fromisoformat(token)
+
+
+def range_duration(seconds):
+    hours, remaining = divmod(seconds, 3600)
+    minutes, seconds = divmod(remaining, 60)
+    return ' '.join(f'{n} {unit}' for n, unit in ((hours, '小时'), (minutes, '分钟'), (seconds, '秒')) if n) or '0 秒'
+
+
+def clock_range_answer(normalized, now):
+    match = CLOCK_RANGE.fullmatch(normalized)
+    if not match or not (wanted := period_metrics(match['topic'])):
+        return None
+    if not match['day']:
+        return '请注明查询日期，例如「昨天9点到11点我坐了多久」。'
+    now = now or datetime.now(store.TZ)
+    now = now.astimezone(store.TZ) if now.tzinfo else now.replace(tzinfo=store.TZ)
+    try:
+        day = clock_date(match['day'], now.date())
+        end_day = day
+        if match['end_day'] in ('次日', '第二天'):
+            end_day += timedelta(days=1)
+        elif match['end_day']:
+            end_day = clock_date(match['end_day'], now.date())
+        hour, minute, marker = clock_time(match['start'], None)
+        last_hour, last_minute, _ = clock_time(match['end'], None if match['end_day'] else marker)
+        start = f'{day.isoformat()}T{hour:02d}:{minute:02d}'
+        end = f'{end_day.isoformat()}T{last_hour:02d}:{last_minute:02d}'
+        if end <= start:
+            return '结束时间须晚于开始时间。跨午夜时请写明「次日」或结束日期。'
+        report = dashboard_data.activity_range(start, end, now=now)
+    except (ValueError, OverflowError):
+        return '请给出有效的北京时间范围，结束时间须在当前时间以内，区间最长 24 小时。'
+
+    parts = []
+    for state, label in (('sit', '坐姿'), ('stand', '站姿')):
+        if state in wanted and report['recorded_seconds']:
+            seconds = report['totals'][state]
+            if seconds:
+                parts.append(f"{label} {range_duration(seconds)}（含推算 {range_duration(report['estimated_' + state])}）")
+            else:
+                parts.append(f'记录中未识别到{label}')
+    if 'present' in wanted and report['presence_recorded_seconds']:
+        present = report['totals']['present']
+        parts.append(f'工位在位 {range_duration(present)}' if present else '记录中未检测到人员在位')
+        for key, label in (('presence_unknown_seconds', '在位状态未知'), ('presence_privacy_seconds', '在位记录隐私保护')):
+            if report[key]:
+                parts.append(f'{label} {range_duration(report[key])}')
+    if wanted.intersection({'sit', 'stand'}) and report['recorded_seconds']:
+        if 'review' in wanted:
+            parts.append(f"离开 {range_duration(report['totals']['away'])}")
+        for state, label in (('unknown', '姿态未知'), ('privacy', '姿态记录隐私保护')):
+            if report['totals'][state] or 'review' in wanted:
+                parts.append(f"{label} {range_duration(report['totals'][state])}")
+        if 'review' in wanted and report['manual_seconds']:
+            parts.append(f"姿态记录中有 {range_duration(report['manual_seconds'])} 经本人校正")
+    for label, key in (('姿态', 'recorded_seconds'), ('在位', 'presence_recorded_seconds')):
+        missing = report['elapsed_seconds'] - report[key]
+        if not report[key]:
+            parts.append(f'未采集{label}记录')
+        elif missing:
+            parts.append(f'{label}未采集 {range_duration(missing)}')
+    return f"北京时间 {start.replace('T', ' ')} 至 {end.replace('T', ' ')}，" + '，'.join(parts) + '。'
 
 
 def week_answer(metrics, now):
@@ -171,11 +297,9 @@ def activity_answer(query, now=None):
     # an unrelated noun ("车站") or the object of a reminder.
     if re.search(r"提醒我|待办|帮我记|应该|建议|多久合适", query):
         return None
-    duration = r"(?:多久|多长(?:时间)?|(?:多少|几)(?:个)?(?:小时|分钟|秒|时间)|多少(?=[？?。！!\s]*$)|时长|时间(?:是多少|多长))"
-    posture_suffix = r"(?:姿(?:势)?|着|立|了|的|累计|总共|一共|总|各|分别|持续)*"
-    pair = r"(?:坐(?:姿)?(?:和|与|、|跟|及)?站(?:姿|立)?|站(?:姿|立)?(?:和|与|、|跟|及)?坐(?:姿)?)"
-    presence = r"(?:在位|工位|桌前)(?:在位|停留|待|在|了|的|累计|总共|一共|总)*" + duration
     normalized = re.sub(r"\s+", "", query).strip("？?。！!")
+    if re.search(CLOCK + CLOCK_SEPARATOR, normalized):
+        return clock_range_answer(normalized, now)
     match = re.search(WEEK_PERIOD, normalized)
     if match:
         # Only an explicit request for local activity may consume a week of records.
@@ -183,34 +307,21 @@ def activity_answer(query, now=None):
         if not re.fullmatch(QUERY_INTRO, intro):
             mixed = r"(?:今天|昨天|前天|本周|上周|\d+月\d+[日号])(?:和|与|、|跟)"
             return RANGE_HELP if re.fullmatch(QUERY_INTRO + mixed, intro) else None
-        topic = re.sub(r"^(?:里|内)?[，,]?(?:我的|我|的)?", "", normalized[match.end():])
-        topic = re.sub(r"(?:呢|吗)$", "", topic)
+        topic = normalized[match.end():]
         if re.search(r"写|翻译|提醒|问卷|采访", topic):
             return None
-        if re.fullmatch(WEEK_REVIEW, topic):
-            return week_answer({"review", "sit", "stand", "present"}, now)
-        topic = re.sub(r"^在(?:桌前|工位)(?=[坐站])", "", topic)
-        measures = [(pair + posture_suffix + duration, {"sit", "stand"}),
-                    ("坐" + posture_suffix + duration, {"sit"}),
-                    ("站" + posture_suffix + duration, {"stand"}), ("(?:在)?" + presence, {"present"})]
-        wanted = set()
-        for phrase in re.split(r"[，,]|(?<=[久间长钟秒时])[、和]", topic):
-            metrics = next((m for pattern, m in measures if re.fullmatch(pattern + r"(?:是多少)?", phrase)), None)
-            if metrics is None:
-                break
-            wanted.update(metrics)
-        else:
+        if wanted := period_metrics(topic):
             return week_answer(wanted, now)
-        return RANGE_HELP if re.search(pair + "|" + presence + "|[坐站].*(?:多久|时长)", topic) else None
+        return RANGE_HELP if re.search(POSTURE_PAIR + "|" + PRESENCE + "|[坐站].*(?:多久|时长)", topic) else None
     if re.fullmatch(QUERY_INTRO + r"(?:本|这|上|下)(?:周|星期)的?" + WEEK_REVIEW, normalized):
         return RANGE_HELP
 
-    combined = re.search(pair + posture_suffix + duration, query)
+    combined = re.search(POSTURE_PAIR + POSTURE_SUFFIX + DURATION, query)
     # Joining punctuation such as "坐了多久、站了多久" works independently.
-    sitting = bool(combined or re.search(r"坐" + posture_suffix + duration, query))
-    standing = bool(combined or re.search(r"站" + posture_suffix + duration, query)
+    sitting = bool(combined or re.search(r"坐" + POSTURE_SUFFIX + DURATION, query))
+    standing = bool(combined or re.search(r"站" + POSTURE_SUFFIX + DURATION, query)
                     or re.search(r"站(?:立|姿)?(?:的)?(?:目标|进度)", query))
-    present = bool(re.search(presence, query))
+    present = bool(re.search(PRESENCE, query))
     if not (sitting or standing or present):
         return None
 
