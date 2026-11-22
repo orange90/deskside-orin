@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, StrictBool
 
 import store
 import model_registry
-from dashboard_data import activity_week, dashboard_snapshot
+from dashboard_data import activity_week, dashboard_snapshot, weekly_markdown
 from telemetry import monitor
 from assistant import Voice, describe_desk_frames, respond
 from state import PersonTrackEvidence, OccupiedPosture, AbsenceEvidence, FrameLight, PresenceContinuity, SittingSession, StableState
@@ -571,6 +571,18 @@ def weekly_activity(end_date: str | None = None):
         return activity_week(end_date)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@app.get("/api/activity/week.md", response_class=Response, responses={200: {"content": {"text/markdown": {}}}})
+def export_week(end_date: str | None = None):
+    try:
+        filename, document = weekly_markdown(end_date)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    return Response(document, media_type="text/markdown", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+    })
 
 
 @app.get("/api/absences")

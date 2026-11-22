@@ -29,6 +29,9 @@
 .week-review[open] summary::after{transform:rotate(180deg)}
 .week-review summary:focus-visible{outline-offset:-4px}
 .week-body{padding:0 23px 18px}.week-body p,.week-body caption{font-size:12px;color:var(--muted)}
+.week-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
+#week-export{font-size:12px;color:var(--green);text-decoration:underline;text-underline-offset:3px}
+#week-export:not([href]){display:none}
 .week-total{display:flex;flex-wrap:wrap;gap:10px 35px;margin:15px 0;padding:14px 17px;background:#f3f6ef;border-radius:11px}
 .week-total dt,.week-value small{color:#5d7065;font-size:11px;font-weight:400}
 .week-total dd{margin:0;font-size:19px;font-weight:550}
@@ -96,7 +99,8 @@
 <details class="card week-review" id="week-review">
   <summary>七日活动回顾</summary>
   <div class="week-body">
-    <p id="week-status" role="status">正在读取七日记录…</p><button type="button" id="week-retry" hidden>重新读取</button>
+    <div class="week-toolbar"><p id="week-status" role="status">正在读取七日记录…</p><a id="week-export" download>下载 Markdown 周记</a></div>
+    <button type="button" id="week-retry" hidden>重新读取</button>
     <div id="week-content" hidden>
       <dl class="week-total" id="week-total" aria-label="七日合计"></dl>
       <table class="week-table">
@@ -301,12 +305,14 @@ function renderWeek(week){
     list.append(row);
   }
   text('week-status',week.start_date+' 至 '+week.end_date+' · 北京时间');
+  el('week-export').href='/api/activity/week.md?end_date='+encodeURIComponent(week.end_date);
   el('week-content').hidden=false;
   if(focusedDate) list.querySelector('[data-week-date="'+focusedDate+'"]')?.focus({preventScroll:true});
 }
 function resetWeek(){
   weekGeneration++;
   weekKey=''; weekLoading=false;
+  el('week-export').removeAttribute('href');
   el('week-content').hidden=true; el('week-retry').hidden=true;
   text('week-status','正在读取七日记录…');
 }
@@ -322,11 +328,13 @@ async function loadWeek(force=false){
   try{
     const week=await request('/api/activity/week?end_date='+encodeURIComponent(day));
     if(current()){
+      if(week.end_date!==day) throw Error('日期范围不符');
       renderWeek(week);
       el('week-retry').hidden=true;
     }
   }catch(error){
     if(current()){
+      el('week-export').removeAttribute('href');
       el('week-content').hidden=true; el('week-retry').hidden=false;
       text('week-status','未能读取 '+day+' 往前七天的记录。');
     }

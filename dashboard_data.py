@@ -94,16 +94,20 @@ def _activity_day(db, day, now):
     totals = dict.fromkeys(('sit', 'stand', 'away', 'unknown', 'privacy', 'present'), 0)
     totals.update(store.activity_totals(rows))
     coverage = {'person': 0.0, 'presence': 0.0}
+    manual = {'person': 0.0, 'presence': 0.0}
     estimates = {'sit': 0.0, 'stand': 0.0}
     for row in rows:
         if row['kind'] not in coverage:
             continue
         duration = row['end'] - row['start']
         coverage[row['kind']] += duration
+        if row.get('source') == 'manual':
+            manual[row['kind']] += duration
         if row['kind'] == 'person' and row.get('source') in {'estimated', 'continuity'}:
             estimates[row['state']] += duration
     return {'date': day.isoformat(), 'totals': totals,
             'estimated_sit': round(estimates['sit']), 'estimated_stand': round(estimates['stand']),
+            'manual_seconds': round(manual['person']), 'manual_presence_seconds': round(manual['presence']),
             'recorded_seconds': round(coverage['person']),
             'presence_recorded_seconds': round(coverage['presence']), 'elapsed_seconds': round(cutoff - start)}
 
@@ -125,6 +129,52 @@ def activity_week(end_date=None, now=None):
     for day in days:
         totals.update(day['totals'])
     result = {'start_date': start.isoformat(), 'end_date': end.isoformat(), 'days': days, 'totals': dict(totals)}
-    for key in ('estimated_sit', 'estimated_stand', 'recorded_seconds', 'presence_recorded_seconds', 'elapsed_seconds'):
+    for key in ('estimated_sit', 'estimated_stand', 'manual_seconds', 'manual_presence_seconds',
+                'recorded_seconds', 'presence_recorded_seconds', 'elapsed_seconds'):
         result[key] = sum(day[key] for day in days)
     return result
+
+
+def _clock_duration(seconds):
+    hours, rest = divmod(seconds, 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f'{hours:02}:{minutes:02}:{seconds:02}'
+
+
+def _markdown_day(label, stats):
+    cells = [label]
+    for state in ('sit', 'stand', 'present', 'away', 'unknown', 'privacy'):
+        source = 'presence_recorded_seconds' if state == 'present' else 'recorded_seconds'
+        cells.append(_clock_duration(stats['totals'][state]) if stats[source] else '未采集')
+    cells.append(_clock_duration(stats['elapsed_seconds'] - stats['recorded_seconds']))
+    return '| ' + ' | '.join(cells) + ' |'
+
+
+def weekly_markdown(end_date=None, now=None):
+    """An Obsidian-ready download made entirely from the aggregate weekly snapshot."""
+    now = (now or datetime.now(store.TZ)).astimezone(store.TZ)
+    week = activity_week(end_date, now)
+    end = week['end_date']
+    cutoff = (f'今天尚未结束，统计截至北京时间 {now:%Y-%m-%d %H:%M:%S}。' if end == now.date().isoformat()
+              else '统计范围为北京时间的七个完整自然日。')
+    lines = [f"# 工位活动回顾 · {week['start_date']} 至 {end}", '', cutoff, '',
+             '| 日期 | 坐姿 | 站姿 | 工位在位 | 离开 | 姿态未知 | 隐私保护 | 姿态未采集 |',
+             '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    lines.extend(_markdown_day(day['date'], day) for day in week['days'])
+    lines.append(_markdown_day('七日合计', week))
+
+    pose = week['recorded_seconds']
+    presence = week['presence_recorded_seconds']
+    lines.extend(['', '## 统计口径', '',
+                  f"- 时长按时、分、秒列出。姿态记录覆盖 {_clock_duration(pose)}，"
+                  f"独立的在位记录覆盖 {_clock_duration(presence)}。未采集表示对应记录缺失。",
+                  '- 姿态未知表示已有记录但未判断出姿态。隐私保护和缺少记录的时段分别列出。'])
+    if pose:
+        lines.append(f"- 坐姿中含推算 {_clock_duration(week['estimated_sit'])}，"
+                     f"站姿中含推算 {_clock_duration(week['estimated_stand'])}。"
+                     '推算包含在位时估计的姿态和短暂缺口补齐。')
+    manual_pose = _clock_duration(week['manual_seconds']) if pose else '未采集'
+    manual_presence = _clock_duration(week['manual_presence_seconds']) if presence else '未采集'
+    lines.append(f"- 本人校正已计入对应状态。姿态记录中的校正时长为 {manual_pose}，"
+                 f"在位记录中的校正时长为 {manual_presence}。")
+    return f'deskside-week-{end}.md', '\n'.join(lines) + '\n'
