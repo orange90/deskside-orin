@@ -87,11 +87,13 @@ def sync_privacy(action=privacy_pause.snapshot, *args, confirm=False, startup=Fa
         with capture_released:
             status = action(*args)
             active = status['active']
-            if startup or manual_pause != active:
-                previous = manual_pause
+            previous = manual_pause
+            manual_pause = active
+            # Extending the same pause only moves its deadline. The camera
+            # stays released and the existing privacy sample clock continues.
+            if startup or (previous or {}).get('id') != (active or {}).get('id'):
                 capture_generation += 1
                 invalidate_scene_locked()
-                manual_pause = active
                 preview = None
                 latest = {"ready": False}
                 capture_released.notify_all()
@@ -669,6 +671,10 @@ class PrivacyStart(BaseModel):
     minutes: int = Field(strict=True)
 
 
+class PrivacyExtension(PrivacyStart):
+    expected_until: float = Field(strict=True, allow_inf_nan=False)
+
+
 class TrialLabel(BaseModel):
     id: uuid.UUID
     state: str
@@ -753,6 +759,19 @@ def camera_privacy():
 def pause_camera(item: PrivacyStart):
     try:
         return sync_privacy(privacy_pause.start, item.id, item.minutes, confirm=True)
+    except privacy_pause.PrivacyConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/camera/privacy/{session_id}/extend")
+def extend_camera_pause(session_id: uuid.UUID, item: PrivacyExtension):
+    try:
+        return sync_privacy(privacy_pause.extend, session_id, item.id, item.minutes,
+                            item.expected_until, confirm=True)
+    except KeyError:
+        raise HTTPException(404, "找不到该次隐私暂停") from None
     except privacy_pause.PrivacyConflict as error:
         raise HTTPException(409, str(error)) from error
     except ValueError as error:

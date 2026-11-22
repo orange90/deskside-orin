@@ -241,7 +241,8 @@
 </section>
 <section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><div class="live-actions"><a href="/field-trial">现场核验坐站识别</a><button id="live-toggle">开启实时画面</button></div></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div><section class="privacy-control" aria-labelledby="privacy-heading"><h3 id="privacy-heading">摄像头隐私暂停</h3>
 <p id="privacy-state" role="status">正在核对摄像头状态…</p>
-<div class="privacy-controls"><label id="privacy-duration">暂停时长 <select id="privacy-minutes"><option value="1">1 分钟</option><option value="15" selected>15 分钟</option><option value="30">30 分钟</option><option value="60">60 分钟</option></select></label>
+<div class="privacy-controls"><label id="privacy-duration"><span id="privacy-duration-label">暂停时长</span> <select id="privacy-minutes"><option value="1">1 分钟</option><option value="15" selected>15 分钟</option><option value="30">30 分钟</option><option value="60">60 分钟</option></select></label>
+<button type="button" id="privacy-extend" hidden>延长暂停</button>
 <button type="button" id="privacy-change" disabled>暂停摄像头</button></div>
 <p class="muted">暂停期间仍可按需使用语音。恢复后继续自动暗场保护。</p>
 <p id="privacy-feedback" role="status"></p></section></div></section>
@@ -364,7 +365,13 @@ let privacyAttempt=null;
 const privacyStorage='deskside.camera-privacy.pending';
 try{
   const saved=JSON.parse(sessionStorage.getItem(privacyStorage));
-  if(saved && typeof saved.id==='string' && (saved.resume===true || [1,15,30,60].includes(saved.minutes))) privacyAttempt=saved;
+  if(saved && typeof saved.id==='string'){
+    const action=saved.action ?? (saved.resume===true?'resume':'start');
+    const validDuration=[1,15,30,60].includes(saved.minutes);
+    if(action==='resume' || (action==='start' && validDuration) ||
+        (action==='extend' && validDuration && typeof saved.session_id==='string' && Number.isFinite(saved.expected_until)))
+      privacyAttempt={...saved,action};
+  }
 }catch{}
 let data=null, hardware=null, catalog=null, selectedKind='person',selectedNote='cosmos',intervalLimit=20,noteLimit=12,recording=false,corner=null,loading=false,modelComponent=null,toastTimer;
 async function request(path,body,timeout){
@@ -1949,16 +1956,26 @@ function renderPrivacy(){
   text('current-detail',c.ready && !c.vision_paused && privacyKnown && !active?
     '今天实时 · '+(c.fps||0)+' FPS · '+(c.presence_source==='short_occlusion'?'遮挡，短时延续在位':names[c.presence]||'未知'):'等待可用画面');
   text('vision-flow-status',active && privacyKnown?'手动隐私暂停':c.vision_paused?'隐私 / 暗场暂停':cameraAvailable()?'视觉采集运行中':'等待摄像头');
-  text('privacy-state',!privacyKnown?'摄像头状态待核对。':active?(privacyAttempt?.id===active.id && !privacyAttempt.resume?'画面已屏蔽，暂停完成待确认 · 期限 ':'已暂停至 ')+new Date(active.until*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+'（北京时间）':
+  const pending=privacyAttempt?.action;
+  text('privacy-state',!privacyKnown?'摄像头状态待核对。':active?(pending==='start' && privacyAttempt.id===active.id?'画面已屏蔽，暂停完成待确认 · 期限 ':'已暂停至 ')+new Date(active.until*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+'（北京时间）':
     c.privacy_active || (c.ready && c.vision_paused)?'手动暂停已关闭，自动暗场保护中。':'手动暂停已关闭。');
-  el('privacy-duration').hidden=!!active || !!privacyAttempt;
+  el('privacy-duration').hidden=!!pending;
+  text('privacy-duration-label',active?'延长时长':'暂停时长');
   el('privacy-minutes').disabled=privacyBusy || !privacyKnown;
-  el('privacy-change').disabled=privacyBusy;
-  text('privacy-change',privacyAttempt?(privacyAttempt.resume?'重试提前恢复':'重试暂停'):!privacyKnown?'重新读取状态':active?'提前恢复':'暂停摄像头');
+  el('privacy-extend').hidden=pending!=='extend' && (!privacyKnown || !active || !!pending);
+  el('privacy-extend').disabled=privacyBusy;
+  text('privacy-extend',pending==='extend'?'重试延长 '+privacyAttempt.minutes+' 分钟':'延长暂停');
+  el('privacy-change').disabled=privacyBusy || pending==='extend';
+  text('privacy-change',pending==='resume'?'重试提前恢复':pending==='start'?'重试暂停':!privacyKnown?'重新读取状态':active?'提前恢复':'暂停摄像头');
   el('show').disabled=!cameraAvailable(); el('live-toggle').disabled=!cameraAvailable() && !liveActive;
 }
 function applyPrivacy(active,now){
   const changed=(privacySession?.id||null)!==(active?.id||null);
+  if(active && !changed && active.until!==privacySession.until){
+    // A session can only gain time. A delayed snapshot must not shorten it.
+    active={...active,until:Math.max(active.until,privacySession.until)};
+    if(active.until!==privacySession.until){privacyVersion++;privacyRead++}
+  }
   if(changed){
     privacyVersion++; privacyRead++; cameraSample=null;
     if(!privacyAttempt) text('privacy-feedback','');
@@ -1967,7 +1984,10 @@ function applyPrivacy(active,now){
   }
   privacySession=active; privacyKnown=true;
   clearTimeout(privacyTimer);
-  if(active && Number.isFinite(now)) privacyTimer=setTimeout(()=>{if(!document.hidden) void syncPrivacy()},Math.max(500,(active.until-now)*1000+100));
+  if(active && Number.isFinite(now)){
+    const delay=Math.min(2**31-1,Math.max(500,(active.until-now)*1000+100));
+    privacyTimer=setTimeout(()=>{if(!document.hidden) void syncPrivacy()},delay);
+  }
 }
 function applyCamera(c,now){
   if((c.manual_privacy && !c.manual_id) || (privacySession && typeof c.manual_privacy!=='boolean')){invalidateCamera('摄像头隐私暂停，实时画面已清除');void syncPrivacy(false);return}
@@ -1978,7 +1998,7 @@ function applyCamera(c,now){
     clearLive(privacySession?'摄像头已手动暂停，实时画面已清除':c.privacy_active?'隐私保护中，实时画面已清除':'画面不可用，预览已暂停');
   }
 }
-async function syncPrivacy(refreshCamera=true){
+async function syncPrivacy(refreshCamera=true,feedback=''){
   if(privacyBusy) return;
   const read=++privacyRead;
   try{
@@ -1986,6 +2006,7 @@ async function syncPrivacy(refreshCamera=true){
     if(read!==privacyRead) return;
     const previous=privacySession?.id;
     applyPrivacy(state.active,state.server_now); renderPrivacy();
+    if(feedback) text('privacy-feedback',feedback);
     if(refreshCamera && (previous!==state.active?.id || !cameraSample)) void refresh();
   }catch(error){
     if(read===privacyRead){invalidateCamera('无法核对摄像头状态，预览已暂停');text('privacy-feedback','无法读取手动隐私状态，可重新核对。')}
@@ -2008,28 +2029,40 @@ function broadcastCameraChange(){
   if(privacyBus) privacyBus.postMessage('changed');
   else try{localStorage.setItem('deskside.camera-privacy.changed',crypto.randomUUID())}catch{}
 }
-el('privacy-change').onclick=async()=>{
+el('privacy-change').onclick=()=>changePrivacy(false);
+el('privacy-extend').onclick=e=>{if(!(e?.detail>1)) return changePrivacy(true)};
+async function changePrivacy(extend){
   if(privacyBusy) return;
+  if(privacyAttempt && extend!==(privacyAttempt.action==='extend')) return;
+  if(extend && !privacyAttempt && (!privacyKnown || !privacySession || !Number.isFinite(privacySession.until))) return;
   if(!privacyKnown && !privacyAttempt){text('privacy-feedback','');void syncPrivacy();return}
-  if(!privacyAttempt) savePrivacyAttempt(privacySession?{id:privacySession.id,resume:true}:
-    {id:crypto.randomUUID(),minutes:Number(el('privacy-minutes').value)});
+  if(!privacyAttempt){
+    const minutes=Number(el('privacy-minutes').value);
+    savePrivacyAttempt(extend?{action:'extend',id:crypto.randomUUID(),session_id:privacySession.id,minutes,expected_until:privacySession.until}:
+      privacySession?{action:'resume',id:privacySession.id}:{action:'start',id:crypto.randomUUID(),minutes});
+  }
   const op=privacyAttempt;
+  let feedback='';
   privacyBusy=true; invalidateCamera('正在核对摄像头操作，预览已暂停'); text('privacy-feedback','正在等待 Orin 确认…');
   try{
-    const state=await request('/api/camera/privacy'+(op.resume?'/'+encodeURIComponent(op.id)+'/resume':''),
-      op.resume?{}:{id:op.id,minutes:op.minutes},12000);
+    const path=op.action==='start'?'':'/'+encodeURIComponent(extend?op.session_id:op.id)+'/'+op.action;
+    const body=op.action==='resume'?{}:{id:op.id,minutes:op.minutes};
+    if(extend) body.expected_until=op.expected_until;
+    const state=await request('/api/camera/privacy'+path,body,12000);
     savePrivacyAttempt(null); applyPrivacy(state.active,state.server_now);
-    text('privacy-feedback',op.resume?(state.active?'当前有另一项手动暂停。':'已结束手动暂停。'):
+    text('privacy-feedback',extend?(state.active?.id===op.session_id?'Orin 已确认延长暂停。':'原暂停已结束。'):
+      op.action==='resume'?(state.active?'当前有另一项手动暂停。':'已结束手动暂停。'):
       state.active?.id===op.id?'Orin 已确认暂停。':'该次暂停已结束。');
   }catch(error){
     if(error.status>=400 && error.status<500) savePrivacyAttempt(null);
-    text('privacy-feedback',privacyAttempt?(error.status===503?error.message:'未确认操作完成，可用同一请求重试。'):error.message);
+    if(extend && error.status===409) feedback=error.message+'。请核对当前期限后再操作。';
+    text('privacy-feedback',privacyAttempt?(error.status===503?error.message:'未确认操作完成，可用同一请求重试。'):feedback || error.message);
   }finally{
     privacyBusy=false; privacyVersion++; renderPrivacy(); broadcastCameraChange();
-    if(!privacyKnown) void syncPrivacy();
+    if(!privacyKnown) void syncPrivacy(true,feedback);
     else void refresh();
   }
-};
+}
 const bones=[[0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
 function clearLive(message){liveEpoch++;const canvas=el('live-canvas');canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);canvas.hidden=true;el('live-placeholder').hidden=false;text('live-message',message);text('live-posture',liveActive?'预览暂停':'等待开启');el('live-details').replaceChildren()}
 async function loadLive(){if(!liveActive||liveBusy||document.hidden||!cameraAvailable())return;liveBusy=true;const generation=liveEpoch;try{const r=await request('/api/live/frame');if(generation!==liveEpoch||!liveActive)return;const c=r.camera;if(c.manual_privacy||c.vision_paused||c.privacy_active){applyCamera(c);return}const img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src='data:image/jpeg;base64,'+r.image});if(generation!==liveEpoch||!liveActive||document.hidden)return;const canvas=el('live-canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);const points=c.overlay?.keypoints||[];const valid=p=>p&&p.confidence>=.55&&p.x>=0&&p.y>=0&&p.x<canvas.width&&p.y<canvas.height;ctx.lineWidth=3;ctx.strokeStyle='#9df7bd';(c.overlay?.detections||[]).forEach(d=>{ctx.setLineDash([8,6]);const [x1,y1,x2,y2]=d.box;ctx.strokeRect(x1,y1,x2-x1,y2-y1);ctx.font='15px system-ui';ctx.fillStyle='#9df7bd';ctx.fillText('人体 '+Math.round(d.confidence*100)+'%',x1,Math.max(20,y1-7))});ctx.setLineDash([]);ctx.lineWidth=4;bones.forEach(([a,b])=>{if(valid(points[a])&&valid(points[b])){ctx.beginPath();ctx.moveTo(points[a].x,points[a].y);ctx.lineTo(points[b].x,points[b].y);ctx.stroke()}});points.forEach(p=>{if(valid(p)){ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fillStyle='#f5cf83';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle='#1e3b2c';ctx.stroke();ctx.strokeStyle='#9df7bd'}});const source=poseMethods[c.pose_source]||'暂无可靠姿态';ctx.fillStyle='rgba(20,40,32,.78)';ctx.fillRect(15,15,Math.min(640,canvas.width-30),75);ctx.fillStyle='#fff';ctx.font='22px system-ui';ctx.fillText(`姿态：${(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':'')}  ·  工位：${names[c.presence]||'未知'}`,30,46);ctx.font='15px system-ui';ctx.fillStyle='#c6d9c7';ctx.fillText(`${source}  /  ${precise(c.captured_at)}  /  有效关节 ${points.filter(valid).length}/17`,30,73);canvas.hidden=false;el('live-placeholder').hidden=true;text('live-posture',c.pose_source==='multiple_people'?'多人在位 · 个人姿态未确认':(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':''));kv(el('live-details'),[['工位',names[c.presence]||'未知'],['骨骼模型',c.vision_model?.name||c.overlay?.model||'—'],['模型耗时',Number.isFinite(c.vision_ms)?c.vision_ms.toFixed(1)+' ms':'—'],['判断来源',source],['可见关节',points.filter(valid).length+' / 17'],['检测帧率',(c.fps||0)+' FPS'],['画面时间',precise(c.captured_at)]]);img.src=''}catch(error){if(generation===liveEpoch){

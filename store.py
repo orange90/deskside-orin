@@ -78,6 +78,9 @@ def initialize():
                 started_at REAL NOT NULL, until REAL NOT NULL CHECK(until>started_at),
                 ended_at REAL CHECK(ended_at BETWEEN started_at AND until));
             CREATE UNIQUE INDEX IF NOT EXISTS one_camera_pause ON camera_pauses((1)) WHERE ended_at IS NULL;
+            CREATE TABLE IF NOT EXISTS camera_pause_extensions (
+                request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES camera_pauses(id),
+                minutes INTEGER NOT NULL CHECK(minutes IN (1,15,30,60)), expected_until REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS field_trials (
                 id TEXT PRIMARY KEY, started_at REAL NOT NULL, deadline REAL NOT NULL CHECK(deadline>started_at),
                 ended_at REAL CHECK(ended_at BETWEEN started_at AND deadline),
