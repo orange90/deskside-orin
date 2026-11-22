@@ -16,7 +16,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import store
 import focus_sessions
@@ -25,9 +25,9 @@ import reminder_queue
 import interval_corrections
 import activity_evidence
 import model_registry
-from dashboard_data import activity_week, dashboard_snapshot, weekly_markdown
+from dashboard_data import activity_week, captured_idea_day, daily_ideas_markdown, dashboard_snapshot, weekly_markdown
 from telemetry import monitor
-from assistant import Voice, describe_desk_frames, respond
+from assistant import Voice, describe_desk_frames, idea_body, respond
 from state import (POSE_METHODS, AbsenceEvidence, FrameLight, OccupiedPosture, PersonTrackEvidence,
                    PresenceContinuity, SittingSession, StableState)
 
@@ -468,9 +468,20 @@ def save_calibration(config):
 
 
 class Query(BaseModel):
-    text: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=1, max_length=540)
     id: uuid.UUID
     save: bool = False
+
+    @field_validator("text")
+    @classmethod
+    def check_text_length(cls, text):
+        if len(text) > 500:
+            idea = idea_body(text)
+            if idea is None:
+                raise ValueError("问题最多 500 字")
+            if len(idea) > 500:
+                raise ValueError("灵感正文最多 500 字")
+        return text
 
 
 class Record(BaseModel):
@@ -717,6 +728,19 @@ def export_week(end_date: str | None = None):
         filename, document = weekly_markdown(end_date)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+    return markdown_download(filename, document)
+
+
+@app.get("/api/ideas/day.md", response_class=Response, responses={200: {"content": {"text/markdown": {}}}})
+def export_ideas(date: str):
+    try:
+        filename, document = daily_ideas_markdown(date)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    return markdown_download(filename, document)
+
+
+def markdown_download(filename, document):
     return Response(document, media_type="text/markdown", headers={
         "Content-Disposition": f'attachment; filename="{filename}"',
         "Cache-Control": "no-store",
@@ -817,10 +841,19 @@ def calibrate(point: str):
     return {point: position}
 
 
+def add_idea_date(reply, query, request_id):
+    if idea_body(query):
+        day = captured_idea_day(request_id)
+        if day is not None:
+            reply["idea_date"] = day
+    return reply
+
+
 @app.post("/api/query")
 def query(item: Query):
     try:
-        return {"answer": respond(item.text, str(item.id), item.save)}
+        reply = {"answer": respond(item.text, str(item.id), item.save)}
+        return add_idea_date(reply, item.text, item.id)
     except (OSError, ValueError) as error:
         raise HTTPException(503, str(error)) from error
 
@@ -837,7 +870,8 @@ def record():
 @app.post("/api/voice/stop")
 def answer(item: Record):
     try:
-        return voice.stop(str(item.id), item.save)
+        reply = voice.stop(str(item.id), item.save)
+        return add_idea_date(reply, reply["query"], item.id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     except Exception as error:

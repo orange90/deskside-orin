@@ -120,6 +120,12 @@ def explicit_tool(query):
     return None
 
 
+def idea_body(query):
+    """Return the explicit capture body, keeping punctuation and internal line breaks."""
+    prefix = re.match(r"^\s*(?:(?:请)?(?:记个|记下)灵感(?:\s*[：:,，、。!！]|\s+|$)|灵感\s*[:：])", query)
+    return query[prefix.end():].strip() if prefix else None
+
+
 WEEK_PERIOD = r"(?:最近|过去|近)(?:的)?(?:[7七]天|[1一](?:周|(?:个)?星期))"
 QUERY_INTRO = (r"(?:请问|请|麻烦)?(?:给我看(?:看)?|帮我(?:看(?:看)?|查(?:询)?)(?:一下)?|"
                r"告诉我|查看|查询|我想知道|我想看看)?(?:我(?:的)?)?")
@@ -281,6 +287,9 @@ def _command_parts(instruction):
 
 
 def _same_explicit_command(original, query):
+    idea = idea_body(original)
+    if idea is not None:
+        return bool(idea) and idea == idea_body(query)
     first, second = explicit_tool(original), explicit_tool(query)
     if first is None or second is None:
         return False
@@ -291,10 +300,16 @@ def _same_explicit_command(original, query):
 
 
 def respond(query, request_id, save, voice_reply=False):
-    if save:
-        previous = store.previous_answer(request_id, query, _same_explicit_command)
-        if previous is not None:
-            return previous
+    idea = idea_body(query)
+    if idea is not None:
+        if not idea:
+            return "请在「灵感：」后写下要记录的内容。"
+        if len(idea) > 500:
+            raise ValueError("每条灵感正文最多 500 字")
+        return store.record_idea(request_id, query, idea, save, _same_explicit_command)
+    previous = store.previous_answer(request_id, query, _same_explicit_command, read_saved=save)
+    if previous is not None:
+        return previous
     new_task = None
     instruction = explicit_tool(query)
     answer = activity_answer(query) if instruction is None else None

@@ -5,6 +5,29 @@ import store
 from posture_continuity import MAX_GAP_SECONDS
 
 
+def captured_idea_day(request_id):
+    with store.database() as db:
+        row = db.execute("SELECT n.at FROM idea_requests r JOIN notes n ON n.id=r.note_id "
+                         "WHERE r.request_id=? AND n.kind='idea'", (str(request_id),)).fetchone()
+    return datetime.fromtimestamp(row['at'], store.TZ).date().isoformat() if row else None
+
+
+def daily_ideas_markdown(day, now=None):
+    now = now or datetime.now(store.TZ)
+    chosen = store.calendar_date(day)
+    if chosen > now.astimezone(store.TZ).date():
+        raise ValueError("无法导出未来日期的灵感")
+    start = datetime.combine(chosen, time.min, store.TZ)
+    cutoff = min((start + timedelta(days=1)).timestamp(), now.timestamp())
+    lines = [f"# 写作灵感 · {chosen.isoformat()}", "", "记录时间为北京时间。"]
+    with store.database() as db:
+        for row in db.execute("SELECT at,body FROM notes WHERE kind='idea' AND at>=? AND at<? "
+                              "ORDER BY at,id", (start.timestamp(), cutoff)):
+            stamp = datetime.fromtimestamp(row['at'], store.TZ).strftime('%H:%M:%S')
+            lines.extend(["", f"## {stamp}", "", row['body']])
+    return f"deskside-ideas-{chosen.isoformat()}.md", "\n".join(lines) + "\n"
+
+
 def merge_intervals(rows):
     merged = []
     for row in sorted(rows, key=lambda r: (r['kind'], r['start'])):
@@ -63,7 +86,9 @@ def dashboard_snapshot(day=None, now=None):
         rows, annotations = store.activity_window(db, start, cutoff, now.timestamp())
         notes = [dict(r) for r in db.execute(
             'SELECT * FROM notes WHERE at>=? AND at<? ORDER BY at,id', (start, cutoff))]
-        first = db.execute("SELECT MIN(start) FROM intervals WHERE kind!='pose_method'").fetchone()[0]
+        first = db.execute("SELECT min(day_start) FROM ("
+                           "SELECT min(start) AS day_start FROM intervals WHERE kind!='pose_method' "
+                           "UNION ALL SELECT min(at) FROM notes WHERE kind='idea')").fetchone()[0]
         settings = dict(db.execute('SELECT key,value FROM settings'))
         today_start = datetime.combine(now.date(), time.min, store.TZ).timestamp()
         reminders = [dict(r) for r in db.execute(

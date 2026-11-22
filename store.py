@@ -39,6 +39,9 @@ def initialize():
             CREATE TABLE IF NOT EXISTS saved_replies (
                 request_id TEXT PRIMARY KEY, note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
                 reply_offset INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS idea_requests (
+                request_id TEXT PRIMARY KEY, note_id INTEGER NOT NULL UNIQUE REFERENCES notes(id) ON DELETE CASCADE);
+            CREATE INDEX IF NOT EXISTS ideas_by_day ON notes(at,id) WHERE kind='idea';
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL,
                 due REAL, fired INTEGER NOT NULL DEFAULT 0);
@@ -220,6 +223,8 @@ def _insert_task(db, request_id, kind, body, minutes=None):
 
 def task(request_id, kind, body, minutes=None):
     with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        _reject_idea_request(db, request_id)
         return _insert_task(db, request_id, kind, body, minutes)
 
 
@@ -242,9 +247,49 @@ def _saved_reply(db, request_id, query, equivalent):
     return row['body'][row['reply_offset']:]
 
 
-def previous_answer(request_id, query, equivalent=None):
+def _reject_idea_request(db, request_id):
+    if db.execute("SELECT 1 FROM idea_requests WHERE request_id=?", (request_id,)).fetchone():
+        raise ValueError("该请求编号已用于记录其他灵感")
+
+
+def previous_answer(request_id, query, equivalent=None, *, read_saved=True):
     with database() as db:
-        return _saved_reply(db, request_id, query, equivalent)
+        _reject_idea_request(db, request_id)
+        return _saved_reply(db, request_id, query, equivalent) if read_saved else None
+
+
+def _save_dialogue(db, request_id, query, answer):
+    prefix = f"{_QUESTION_PREFIX}{query}{_ANSWER_PREFIX}"
+    note = db.execute("INSERT INTO notes(kind,body,at) VALUES ('dialogue',?,?)",
+                      (prefix + answer, time.time()))
+    db.execute("INSERT INTO saved_replies(request_id,note_id,reply_offset) VALUES (?,?,?)",
+               (request_id, note.lastrowid, len(prefix)))
+
+
+def record_idea(request_id, query, body, save, equivalent=None):
+    answer = "已记下灵感。"
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        original = db.execute(
+            "SELECT n.body FROM idea_requests r JOIN notes n ON n.id=r.note_id WHERE r.request_id=?",
+            (request_id,)).fetchone()
+        if original is not None:
+            if original['body'] != body:
+                raise ValueError("该请求编号已用于记录其他灵感")
+        else:
+            occupied = db.execute("SELECT 1 FROM tasks WHERE id=? UNION ALL "
+                                  "SELECT 1 FROM saved_replies WHERE request_id=? LIMIT 1",
+                                  (request_id, request_id)).fetchone()
+            if occupied:
+                raise ValueError("该请求编号已用于其他任务或问题")
+            note = db.execute("INSERT INTO notes(kind,body,at) VALUES ('idea',?,?)", (body, time.time()))
+            db.execute("INSERT INTO idea_requests(request_id,note_id) VALUES (?,?)", (request_id, note.lastrowid))
+        if save:
+            previous = _saved_reply(db, request_id, query, equivalent)
+            if previous is not None:
+                return previous
+            _save_dialogue(db, request_id, query, answer)
+    return answer
 
 
 def record_answer(request_id, query, answer, save, new_task, equivalent=None):
@@ -254,18 +299,15 @@ def record_answer(request_id, query, answer, save, new_task, equivalent=None):
         return answer
     # A confirmed draft can be retried after a lost HTTP response. Store the
     # task and the opted-in dialogue together. Keep just one copy of the text.
-    prefix = f"{_QUESTION_PREFIX}{query}{_ANSWER_PREFIX}"
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
+        _reject_idea_request(db, request_id)
         previous = _saved_reply(db, request_id, query, equivalent)
         if previous is not None:
             return previous
         if new_task:
             _insert_task(db, request_id, **new_task)
-        note = db.execute("INSERT INTO notes(kind,body,at) VALUES ('dialogue',?,?)",
-                          (prefix + answer, time.time()))
-        db.execute("INSERT INTO saved_replies(request_id,note_id,reply_offset) VALUES (?,?,?)",
-                   (request_id, note.lastrowid, len(prefix)))
+        _save_dialogue(db, request_id, query, answer)
     return answer
 
 

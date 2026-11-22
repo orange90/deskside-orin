@@ -30,8 +30,8 @@
 .week-review summary:focus-visible{outline-offset:-4px}
 .week-body{padding:0 23px 18px}.week-body p,.week-body caption{font-size:12px;color:var(--muted)}
 .week-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
-#week-export{font-size:12px;color:var(--green);text-decoration:underline;text-underline-offset:3px}
-#week-export:not([href]){display:none}
+#week-export,#idea-export{font-size:12px;color:var(--green);text-decoration:underline;text-underline-offset:3px}
+#week-export:not([href]),#idea-export:not([href]){display:none}
 .week-total{display:flex;flex-wrap:wrap;gap:10px 35px;margin:15px 0;padding:14px 17px;background:#f3f6ef;border-radius:11px}
 .week-total dt,.week-value small{color:#5d7065;font-size:11px;font-weight:400}
 .week-total dd{margin:0;font-size:19px;font-weight:550}
@@ -113,6 +113,12 @@
 #reminder-recent{border-top:1px solid var(--line);margin-top:12px;padding-top:10px;font-size:12px}
 #reminder-recent summary{cursor:pointer}#reminder-history{padding:0;margin:3px 0;max-height:200px;overflow:auto}
 #reminder-history li{list-style:none;padding:6px 0;overflow-wrap:anywhere}#reminder-history small{display:block;color:var(--muted)}
+#idea-compose{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:10px;font-size:12px}
+#idea-compose textarea{display:block;width:100%;margin:4px 0 8px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;font-size:14px;color:var(--ink)}
+#idea-compose textarea:focus-visible{outline:3px solid #91b898;outline-offset:2px}
+.idea-compose-actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px}
+#idea-view{font-size:12px;padding:5px 9px}
+.note-record .body{min-width:0;overflow-wrap:anywhere}.note-record>div{min-width:0}
 </style>
 </head>
 <body>
@@ -179,8 +185,14 @@
 <div class="lower-grid"><section class="card" id="records"><div class="section-head"><h2 id="records-heading" tabindex="-1">活动时间段</h2><span class="muted" id="interval-count"></span></div><div class="tabs" role="group" aria-label="记录类型"><button class="active" data-kind="person">坐站与离开</button><button data-kind="presence">工位在位</button><button data-kind="desk">桌面档位</button></div><ul id="timeline" class="record-list"></ul><button id="more-intervals" class="more" hidden>查看更多时间段</button>
 <details id="segment-history" hidden><summary id="segment-count">本日分段校正</summary><ul id="segment-edits"></ul></details>
 <p id="segment-notice" role="status"></p></section>
-<section class="card"><div class="section-head"><h2>这一段，发生了什么</h2><span class="muted" id="summary-count"></span></div><div class="tabs" role="group" aria-label="摘要类型"><button class="active" data-note="cosmos">画面摘要</button><button data-note="dialogue">已保存对话</button><button data-note="reminder">提醒</button></div><div id="notes" class="record-list"></div><button id="more-notes" class="more" hidden>查看更多摘要</button><p class="hardware-sub" style="margin-top:15px">相同摘要按连续观察段合并；时间范围表示首末采样时刻。原始记录保留。</p></section></div>
-<section id="assistant" class="ask-grid"><div class="card"><div class="section-head"><div><h2>和本地助手聊聊</h2><p class="muted">查询坐站记录，添加待办，或设置文字提醒</p></div><span style="color:#789368">✳</span></div><form id="question" class="ask-form"><input id="query" maxlength="500" placeholder="我今天坐了多久？" aria-label="向本地助手提问" required><button id="send" class="primary">发送</button></form><div class="voice-row"><button id="voice">开始语音提问</button><span>使用 Orin 麦克风</span><label><input id="voice-review" type="checkbox">校对后发送</label><label><input id="save" type="checkbox">保存这次对话</label></div><p id="feedback" class="feedback" role="status">答复会显示在这里。</p><ul id="reminder-notes"></ul></div><section class="card" id="inbox" aria-labelledby="inbox-title">
+<section class="card"><div class="section-head"><h2>这一段，发生了什么</h2><span class="muted" id="summary-count"></span></div><div class="tabs" role="group" aria-label="摘要类型"><button class="active" data-note="cosmos" aria-pressed="true">画面摘要</button><button data-note="dialogue" aria-pressed="false">已保存对话</button><button data-note="reminder" aria-pressed="false">提醒</button><button data-note="idea" aria-pressed="false">灵感</button></div><div id="notes" class="record-list"></div><button id="more-notes" class="more" hidden>查看更多摘要</button><a id="idea-export" download>下载当天灵感</a><p id="notes-caption" class="hardware-sub" style="margin-top:15px">相同摘要按连续观察段合并；时间范围表示首末采样时刻。原始记录保留。</p></section></div>
+<section id="assistant" class="ask-grid"><div class="card"><div class="section-head"><div><h2>和本地助手聊聊</h2><p class="muted">查询坐站记录，添加待办，或设置文字提醒</p></div><span style="color:#789368">✳</span></div><form id="question" class="ask-form"><input id="query" placeholder="我今天坐了多久？" aria-label="向本地助手提问" required><button id="send" class="primary">发送</button></form><div class="voice-row"><button id="voice">开始语音提问</button><span>使用 Orin 麦克风</span><button type="button" id="idea-toggle" aria-controls="idea-compose" aria-expanded="false">记灵感</button><label><input id="voice-review" type="checkbox">校对后发送</label><label><input id="save" type="checkbox">保存这次对话</label></div>
+<form id="idea-compose" hidden>
+  <label for="idea-body">灵感正文</label>
+  <textarea id="idea-body" rows="3" required aria-describedby="idea-hint" placeholder="写下想法，可换行"></textarea>
+  <div class="idea-compose-actions"><small id="idea-hint" class="muted">也可以说「记个灵感，…」</small><button class="primary" id="idea-submit">保存灵感</button></div>
+</form>
+<p id="feedback" class="feedback" role="status">答复会显示在这里。</p><button type="button" id="idea-view" hidden>查看已存灵感</button><ul id="reminder-notes"></ul></div><section class="card" id="inbox" aria-labelledby="inbox-title">
   <div class="section-head"><h2 id="inbox-title">待办与提醒</h2></div>
   <div class="tabs" role="group" aria-label="待办与提醒分类">
     <button type="button" data-inbox="open" class="active" aria-pressed="true">待办</button>
@@ -336,7 +348,35 @@ function renderIntervals(){
   if(focused) (restore||el('records-heading')).focus({preventScroll:true});
   renderSegmentHistory();
 }
-function renderNotes(){const list=el('notes'),rows=data.notes.filter(n=>n.kind===selectedNote);text('summary-count',selectedNote==='cosmos'?`${rows.reduce((s,n)=>s+n.count,0)} 条观察 → ${rows.length} 段`:`${rows.length} 条`);list.replaceChildren();rows.slice(0,noteLimit).forEach(n=>{const div=make('div','note-record'),body=make('div');div.append(make('time','',n.count>1?`${at(n.start)} – ${at(n.end)}`:precise(n.start)));body.append(make('div','body',n.body));if(n.count>1)body.append(make('span','count-tag',`${n.count} 次相同观察 · 已合并`));div.append(body);list.append(div)});if(!rows.length)empty(list,selectedNote==='dialogue'?'这一天没有保存的对话':'这一天还没有相关记录');el('more-notes').hidden=rows.length<=noteLimit}
+function selectNotes(kind){
+  selectedNote=kind; noteLimit=12;
+  for(const button of document.querySelectorAll('[data-note]')){
+    const active=button.dataset.note===kind;
+    button.classList.toggle('active',active); button.setAttribute('aria-pressed',String(active));
+  }
+  renderNotes();
+}
+function renderNotes(){
+  const list=el('notes'), link=el('idea-export'), ideas=selectedNote==='idea';
+  link.removeAttribute('href');
+  text('notes-caption',ideas?'灵感按北京时间显示。':'相同摘要按连续观察段合并；时间范围表示首末采样时刻。原始记录保留。');
+  if(!data || data.date!==el('day').value){
+    text('summary-count',''); el('more-notes').hidden=true; empty(list,'正在读取所选日期…'); return;
+  }
+  const rows=data.notes.filter(n=>n.kind===selectedNote);
+  text('summary-count',selectedNote==='cosmos'?`${rows.reduce((s,n)=>s+n.count,0)} 条观察 → ${rows.length} 段`:`${rows.length} 条`);
+  list.replaceChildren();
+  for(const n of rows.slice(0,noteLimit)){
+    const div=make('div','note-record'), body=make('div');
+    div.append(make('time','',n.count>1?`${at(n.start)} – ${at(n.end)}`:precise(n.start)));
+    body.append(make('div','body',n.body));
+    if(n.count>1) body.append(make('span','count-tag',`${n.count} 次相同观察 · 已合并`));
+    div.append(body); list.append(div);
+  }
+  if(!rows.length) empty(list,ideas?'这一天没有记录灵感。':selectedNote==='dialogue'?'这一天没有保存的对话':'这一天还没有相关记录');
+  if(ideas && rows.length) link.href='/api/ideas/day.md?date='+encodeURIComponent(data.date);
+  el('more-notes').hidden=rows.length<=noteLimit;
+}
 function postureRuns(intervals) {
   const runs = [];
   for (const row of intervals.filter(i => i.kind === 'person').sort((a,b) => a.start-b.start)) {
@@ -767,8 +807,12 @@ function updateInbox(){
   }
 }
 async function queryWithTaskId(path,body,id=crypto.randomUUID(),timeout){
+  const view=el('idea-view');
+  view.hidden=true;
   const reply=await request(path,{...body,id},timeout);
-  revealTaskId=id;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(reply.idea_date)){
+    view.dataset.date=reply.idea_date; view.textContent='查看 '+reply.idea_date+' 的灵感'; view.hidden=false;
+  }else revealTaskId=id;
   return reply;
 }
 inboxTabs.forEach(tab=>tab.onclick=()=>{if(tab.dataset.inbox!==inboxView) selectInbox(tab.dataset.inbox)});
@@ -776,6 +820,7 @@ el('inbox-prev').onclick=()=>{if(inboxTrail.length>1){inboxTrail.pop();showInbox
 el('inbox-next').onclick=()=>{if(inboxNext){inboxTrail.push(inboxNext);showInboxPage(true)}};
 el('inbox-retry').onclick=()=>readInbox();
 async function refresh() {
+  if(selectedNote==='idea' && data?.date!==el('day').value) renderNotes();
   if(segmentModal.open) updateSegmentForm();
   el('open-absence').hidden=!(data && el('day').value===data.date && data.date<data.today);
   if(weekPanel.open && weekKey && weekKey!==el('day').value+'/'+activityRevision) resetWeek();
@@ -797,6 +842,7 @@ async function refresh() {
       el('error').hidden=true; text('connection','● 本机已连接 · 数据不上传');
     } else if (unchanged()) {
       if(!data || inboxView==='reminders') void readInbox();
+      if(selectedNote==='idea' && data?.date!==el('day').value) empty(el('notes'),'所选日期的灵感暂时无法读取。');
       if(weekPanel.open && !weekKey){
         text('week-status','未能读取所选日期的记录。'); el('week-retry').hidden=false;
       }
@@ -1126,12 +1172,27 @@ async function changeAbsence(undoBatch){
 }
 function changeDay(delta){if(!el('day').value)return;followToday=false;const d=new Date(el('day').value+'T12:00:00+08:00');d.setUTCDate(d.getUTCDate()+delta);el('day').value=d.toISOString().slice(0,10);intervalLimit=20;noteLimit=12;refresh()}
 el('previous').onclick=()=>changeDay(-1);el('next').onclick=()=>changeDay(1);el('today').onclick=()=>{followToday=true;el('day').value='';refresh()};el('day').onchange=()=>{followToday=!el('day').value;intervalLimit=20;noteLimit=12;refresh()};
-document.querySelectorAll('[data-kind]').forEach(b=>b.onclick=()=>{selectedKind=b.dataset.kind;intervalLimit=20;document.querySelectorAll('[data-kind]').forEach(x=>x.classList.toggle('active',x===b));if(data)renderIntervals()});document.querySelectorAll('[data-note]').forEach(b=>b.onclick=()=>{selectedNote=b.dataset.note;noteLimit=12;document.querySelectorAll('[data-note]').forEach(x=>x.classList.toggle('active',x===b));if(data)renderNotes()});el('more-intervals').onclick=()=>{intervalLimit+=30;renderIntervals()};el('more-notes').onclick=()=>{noteLimit+=20;renderNotes()};
+document.querySelectorAll('[data-kind]').forEach(b=>b.onclick=()=>{selectedKind=b.dataset.kind;intervalLimit=20;document.querySelectorAll('[data-kind]').forEach(x=>x.classList.toggle('active',x===b));if(data)renderIntervals()});document.querySelectorAll('[data-note]').forEach(b=>b.onclick=()=>selectNotes(b.dataset.note));el('more-intervals').onclick=()=>{intervalLimit+=30;renderIntervals()};el('more-notes').onclick=()=>{noteLimit+=20;renderNotes()};
 async function action(fn){try{await fn();await refresh()}catch(e){text('feedback',e.message);notify(e.message)}}
 // Only explicit command boundaries may vary on retry. Ordinary questions and
 // punctuation inside a task retain their literal text.
 const queryAttempts=new Map();
+// Match the explicit idea prefix only. Keep all punctuation and line breaks in the body.
+function ideaBody(query){
+  const prefix=/^\p{White_Space}*(?:请?(?:记个|记下)灵感(?:\p{White_Space}*[：:,，、。！!]|\p{White_Space}+|$)|灵感\p{White_Space}*[:：])/u.exec(query.replace(/[\u001c-\u001f]/gu,' '));
+  return prefix ? query.slice(prefix[0].length).replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu,'') : null;
+}
+function queryLength(query){
+  return Array.from(ideaBody(query) ?? query).length;
+}
+function querySizeError(query,length=queryLength(query)){
+  if(length>500) return '请精简到 500 字以内 · 当前 '+length+' 字';
+  if(Array.from(query).length>540) return '请缩短指令或首尾空白，总长度最多 540 字。';
+  return '';
+}
 function queryRetryKey(raw){
+  const idea=ideaBody(raw);
+  if(idea!==null) return JSON.stringify(['idea',idea]);
   const text=raw.trim();
   if(!/[\r\n\uFEFF]/u.test(raw)){
     const task=/^(请?(?:添加|新增)(?:一个|一条)?待办(?:事项)?)[：:,，、。 \t\u3000]*(.+)$/u.exec(text);
@@ -1154,6 +1215,42 @@ async function submitQuery(channel,query,save){
   queryAttempts.delete(channel);
   return reply;
 }
+const typedQuery=el('query'), ideaText=el('idea-body');
+typedQuery.oninput=()=>typedQuery.setCustomValidity(querySizeError(typedQuery.value));
+function toggleIdea(open,focus=true){
+  el('idea-compose').hidden=!open; el('idea-toggle').setAttribute('aria-expanded',String(open));
+  if(focus) (open?ideaText:el('idea-toggle')).focus();
+}
+el('idea-toggle').onclick=()=>toggleIdea(el('idea-compose').hidden);
+const ideaCommand=()=> '记个灵感，'+ideaText.value;
+ideaText.oninput=()=>ideaText.setCustomValidity(ideaBody(ideaCommand())?querySizeError(ideaCommand()):'请先写下灵感正文。');
+el('idea-compose').onsubmit=e=>{
+  e.preventDefault();
+  if(el('idea-submit').disabled) return;
+  action(async()=>{
+    el('idea-submit').disabled=true; ideaText.readOnly=true; el('idea-toggle').disabled=true;
+    let focusToggle=false;
+    try{
+      const reply=await submitQuery('idea',ideaCommand(),el('save').checked);
+      text('feedback',reply.answer);
+      if(reply.idea_date){
+        focusToggle=document.activeElement===document.body || el('idea-compose').contains(document.activeElement);
+        ideaText.value=''; toggleIdea(false,false);
+      }
+    }catch(error){
+      if(!error.status) throw Error('未收到保存结果，灵感正文已保留，可重试。');
+      throw error;
+    }finally{
+      el('idea-submit').disabled=ideaText.readOnly=el('idea-toggle').disabled=false;
+      if(focusToggle) el('idea-toggle').focus({preventScroll:true});
+    }
+  });
+};
+el('idea-view').onclick=()=>{
+  el('day').value=el('idea-view').dataset.date; followToday=false; intervalLimit=20;
+  selectNotes('idea'); document.querySelector('[data-note="idea"]').focus();
+  void refresh();
+};
 el('question').onsubmit=e=>{
   e.preventDefault();
   if(el('send').disabled) return;
@@ -1175,9 +1272,9 @@ reviewVoice.onchange=()=>{
   try{localStorage.setItem('deskside-voice-review',reviewVoice.checked?'yes':'no')}catch{}
 };
 function updateDraftControls(){
-  const length=Array.from(draftText.value).length;
-  text('voice-draft-count',length>500?'请精简到 500 字以内 · 当前 '+length+' 字':length+' / 500 字');
-  el('voice-draft-send').disabled=draftSending || !draftText.value.trim() || length>500;
+  const length=queryLength(draftText.value), issue=querySizeError(draftText.value,length);
+  text('voice-draft-count',issue || length+' / 500 字');
+  el('voice-draft-send').disabled=draftSending || !draftText.value.trim() || !!issue;
   el('voice-draft-discard').disabled=el('voice-draft-save').disabled=draftSending;
   draftText.readOnly=draftSending;
 }
