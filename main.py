@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import store
 import focus_sessions
+import focus_handoffs
 import field_trials
 import privacy_pause
 import reminder_queue
@@ -642,6 +643,14 @@ class FocusStart(BaseModel):
     task_id: str | None = None
 
 
+class HandoffContent(BaseModel):
+    body: str = Field(strict=True, min_length=1, max_length=500)
+
+
+class ResumeHandoff(BaseModel):
+    id: uuid.UUID
+
+
 class PrivacyStart(BaseModel):
     id: uuid.UUID
     minutes: int = Field(strict=True)
@@ -778,6 +787,37 @@ def finish_focus(session_id: uuid.UUID):
         return focus_sessions.finish(session_id)
     except KeyError:
         raise HTTPException(404, "找不到该次专注计时") from None
+
+
+def handoff_action(action, *args):
+    try:
+        return action(*args)
+    except KeyError:
+        raise HTTPException(404, "找不到这次专注或续做便签") from None
+    except (focus_handoffs.HandoffConflict, focus_sessions.FocusConflict) as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/api/focus/handoffs")
+def pending_handoffs(before: str | None = None):
+    return handoff_action(focus_handoffs.pending, before)
+
+
+@app.post("/api/focus/{session_id}/handoff")
+def leave_handoff(session_id: uuid.UUID, item: HandoffContent):
+    return handoff_action(focus_handoffs.save, session_id, item.body)
+
+
+@app.post("/api/focus/handoffs/{session_id}/resume")
+def resume_handoff(session_id: uuid.UUID, item: ResumeHandoff):
+    return handoff_action(focus_handoffs.resume, session_id, item.id)
+
+
+@app.post("/api/focus/handoffs/{session_id}/dismiss")
+def dismiss_handoff(session_id: uuid.UUID):
+    return handoff_action(focus_handoffs.dismiss, session_id)
 
 
 @app.get("/api/todos")

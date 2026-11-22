@@ -123,6 +123,16 @@
 .privacy-controls{display:flex;align-items:center;flex-wrap:wrap;gap:7px;font-size:13px}
 .privacy-control p{font-size:12px;margin:5px 0}.privacy-controls select,.privacy-controls button{font-size:13px;padding:6px 9px}
 #privacy-feedback:empty{display:none}
+#handoffs{margin-top:13px;border-top:1px solid var(--line);padding-top:10px}
+#handoffs summary{cursor:pointer;font-size:13px}#handoff-list{padding:0;margin:6px 0;list-style:none;max-height:330px;overflow:auto}
+#handoff-list li{padding:9px 2px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.handoff-body{white-space:pre-wrap;overflow-wrap:anywhere}
+#handoff-editor,#focus-resume-note{margin-top:10px;padding:12px;background:#f4f7f0;border-radius:9px}
+#handoff-editor textarea{display:block;width:100%;margin:5px 0 8px;padding:8px;border:1px solid var(--line);border-radius:8px;resize:vertical;font:inherit}
+#handoff-editor textarea:focus-visible{outline:3px solid #91b898;outline-offset:2px}
+.handoff-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:5px}
+#focus .handoff-actions button,#handoff-active,#handoff-recent,#handoff-retry-resume{padding:6px 10px;font-size:12px}
+#handoff-status,#handoff-error{font-size:12px;margin-top:7px}#handoff-status:empty{display:none}
 </style>
 </head>
 <body>
@@ -171,9 +181,22 @@
     <button class="primary" id="focus-start">开始专注</button>
   </form>
   <div class="focus-running" id="focus-running" hidden><strong id="focus-name"></strong>
-    <span class="muted" id="focus-clock-label">剩余</span><span id="focus-clock" role="timer" aria-label="剩余时间"></span><button id="focus-finish" type="button">提前结束</button>
+    <span class="muted" id="focus-clock-label">剩余</span><span id="focus-clock" role="timer" aria-label="剩余时间"></span><button id="focus-finish" type="button">提前结束</button><button id="handoff-active" type="button" aria-controls="handoff-editor">留一句并结束</button>
   </div>
-  <p id="focus-last" class="muted"></p><p id="focus-message" role="status"></p>
+  <div id="focus-resume-note" hidden><strong>上次留下的便签</strong><p id="focus-resume-body" class="handoff-body"></p></div>
+  <p id="focus-last" class="muted"></p><button type="button" id="handoff-recent" aria-controls="handoff-editor" hidden>给上次专注留一句</button>
+  <form id="handoff-editor" hidden>
+    <strong id="handoff-source"></strong><label for="handoff-body" style="display:block">下次从哪里继续？</label>
+    <textarea id="handoff-body" rows="3" aria-describedby="handoff-size" required></textarea>
+    <div class="handoff-actions"><small class="muted" id="handoff-size"></small><button id="handoff-save" class="primary">保存便签</button><button type="button" id="handoff-discard">放弃草稿</button></div>
+  </form>
+  <details id="handoffs"><summary>待续做</summary>
+    <ul id="handoff-list" aria-label="待续做便签"></ul>
+    <nav id="handoff-pages" class="inbox-pages" aria-label="续做便签分页" hidden><button type="button" id="handoff-prev">上一页</button><span id="handoff-page"></span><button type="button" id="handoff-next">下一页</button></nav>
+    <p id="handoff-error" hidden>暂时无法读取续做便签。 <button id="handoff-reload" type="button">重新读取</button></p>
+  </details>
+  <p id="handoff-status" role="status"></p><button type="button" id="handoff-retry-resume" hidden>重试同一次接续</button>
+  <p id="focus-message" role="status"></p>
   <p id="focus-sync" class="muted"><span id="focus-sync-text">正在连接 Orin…</span> <button type="button" id="focus-retry" hidden>重新同步</button></p>
 </section>
 <section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><div class="live-actions"><a href="/field-trial">现场核验坐站识别</a><button id="live-toggle">开启实时画面</button></div></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div><section class="privacy-control" aria-labelledby="privacy-heading"><h3 id="privacy-heading">摄像头隐私暂停</h3>
@@ -565,6 +588,7 @@ function renderFocus(){
   text('focus-last',last?'上次 · '+last.title+' · '+time+(last.state==='finished'?' 已到时':' 提前结束'):'');
   el('focus-sync').hidden=focusOnline;
   el('focus-retry').hidden=focusOnline;
+  renderHandoffControls(active,last);
   if(!focusOnline) text('focus-sync-text',active?'连接中断，剩余时间按上次同步估算。':'暂时无法读取 Orin 计时状态。');
 }
 async function syncFocus(afterWrite=false){
@@ -577,6 +601,10 @@ async function syncFocus(afterWrite=false){
     if(!Number.isFinite(next.server_now)) throw Error('计时状态不可用');
     if(focusSnapshot?.active && !next.active) text('focus-message','');
     focusSnapshot=next; focusSyncedAt=performance.now(); focusOnline=true;
+    if(handoffResume && [next.active,...next.recent].some(s=>s?.id===handoffResume.id)){
+      rememberResume(null); text('handoff-status','Orin 已确认接续。');
+    }
+    if(el('handoffs').open) void readHandoffs();
     if(focusAttempt && [next.active,...next.recent].some(s=>s?.id===focusAttempt.id)){
       if(focusAttempt.key===JSON.stringify(focusDraft())) selectFocusSource(null);
       focusAttempt=null; text('focus-message','');
@@ -613,6 +641,156 @@ el('focus-form').onsubmit=e=>{e.preventDefault();if(!focusSnapshot?.active) void
 el('focus-finish').onclick=()=>{if(focusSnapshot?.active) void changeFocus(focusSnapshot.active.id)};
 el('focus-detach').onclick=()=>{selectFocusSource(null);el('focus-title').focus()};
 el('focus-retry').onclick=()=>syncFocus();
+let handoffSource=null, handoffResume=null, handoffTrail=[null], handoffNext=null;
+let handoffRead=0, handoffLoading=false, handoffOnline=false, handoffKey='';
+const handoffStorage='deskside.focus.resume', editor=el('handoff-editor'), handoffBody=el('handoff-body');
+try{
+  const saved=JSON.parse(sessionStorage.getItem(handoffStorage));
+  if(saved && typeof saved.id==='string' && typeof saved.source==='string') handoffResume=saved;
+}catch{}
+function rememberResume(op){
+  handoffResume=op;
+  try{if(op) sessionStorage.setItem(handoffStorage,JSON.stringify(op));else sessionStorage.removeItem(handoffStorage)}catch{}
+}
+function renderHandoffControls(active=focusSnapshot?.active,last=focusSnapshot?.recent[0]){
+  el('handoff-active').hidden=!active || !!active.has_handoff;
+  el('handoff-recent').hidden=last?.state!=='finished' || !!last.has_handoff;
+  el('handoff-active').disabled=el('handoff-recent').disabled=focusBusy || !focusOnline;
+  el('focus-resume-note').hidden=!active?.resume_note;
+  const resumeBody=active?.resume_note || '';
+  if(el('focus-resume-body').textContent!==resumeBody) text('focus-resume-body',resumeBody);
+  el('handoff-retry-resume').hidden=!handoffResume; el('handoff-retry-resume').disabled=focusBusy;
+  for(const button of document.querySelectorAll('#handoff-list button')){
+    button.disabled=focusBusy || !handoffOnline || (button.dataset.action==='resume' && (!!active || !!handoffResume || !focusOnline));
+  }
+  updateHandoffEditor(active);
+}
+function updateHandoffEditor(active=focusSnapshot?.active){
+  if(!handoffSource) return;
+  const length=Array.from(handoffBody.value).length;
+  text('handoff-size',length+' / 500 字');
+  text('handoff-save',active?.id===handoffSource.id?'保存并结束专注':'保存便签');
+  el('handoff-save').disabled=focusBusy || !focusOnline || !/[^\p{White_Space}\u001c-\u001f]/u.test(handoffBody.value) || length>500;
+  handoffBody.readOnly=focusBusy; el('handoff-discard').disabled=focusBusy;
+}
+function openHandoff(source){
+  if(!source || focusBusy) return;
+  if(handoffSource && handoffSource.id!==source.id && handoffBody.value){
+    text('handoff-status','请先处理正在编辑的「'+handoffSource.title+'」草稿。');
+  }else{
+    handoffSource=source; text('handoff-source',source.title); text('handoff-status','');
+  }
+  editor.hidden=false; renderHandoffControls(); handoffBody.focus();
+}
+function closeHandoff(){
+  editor.hidden=true; handoffSource=null; handoffBody.value='';
+}
+el('handoff-active').onclick=()=>openHandoff(focusSnapshot?.active);
+el('handoff-recent').onclick=()=>openHandoff(focusSnapshot?.recent[0]);
+el('handoff-discard').onclick=()=>{
+  if(handoffBody.value && !confirm('放弃这条未保存的便签？')) return;
+  closeHandoff(); el('focus-heading').focus({preventScroll:true});
+};
+handoffBody.oninput=()=>updateHandoffEditor();
+editor.onsubmit=e=>{e.preventDefault();if(handoffSource && !el('handoff-save').disabled) void writeHandoff('save',handoffSource)};
+function showHandoffsPage(focusPage=false){
+  handoffRead++; handoffLoading=false; handoffOnline=false; handoffKey=''; handoffNext=null;
+  el('handoff-list').replaceChildren(make('li','muted','正在读取…'));
+  el('handoff-error').hidden=true; el('handoff-pages').hidden=true;
+  if(!el('handoffs').open) return;
+  const loaded=readHandoffs(), page=handoffRead;
+  if(focusPage) loaded.then(()=>{
+    if(page===handoffRead && document.activeElement===document.body){
+      const target=el('handoff-list').querySelector('button:not(:disabled)') || el('handoffs').querySelector('summary');
+      target.focus({preventScroll:true});
+    }
+  });
+}
+el('handoffs').ontoggle=()=>{handoffTrail=[null];showHandoffsPage()};
+el('handoff-prev').onclick=()=>{if(handoffTrail.length>1){handoffTrail.pop();showHandoffsPage(true)}};
+el('handoff-next').onclick=()=>{if(handoffNext){handoffTrail.push(handoffNext);showHandoffsPage(true)}};
+el('handoff-reload').onclick=()=>readHandoffs();
+function renderHandoffs(items){
+  const key=JSON.stringify(items);
+  if(handoffKey===key) return;
+  handoffKey=key;
+  const focus=document.activeElement?.dataset, list=el('handoff-list'), buttons=[];
+  const rows=items.map(item=>{
+    const row=make('li'), actions=make('div','handoff-actions');
+    row.append(make('strong','',item.title),make('p','muted',reminderTime(item.created_at)+' · '+item.minutes+' 分钟'),
+      make('p','handoff-body',item.body));
+    for(const [action,label] of [['resume','接着做'],['dismiss','归档']]){
+      const button=make('button','',label); button.type='button'; button.dataset.source=item.id; button.dataset.action=action;
+      button.setAttribute('aria-label',label+' · '+item.title);
+      button.onclick=()=>{
+        if(action==='dismiss' && !confirm('归档「'+item.title+'」的续做便签？')) return;
+        void writeHandoff(action,item);
+      };
+      actions.append(button); buttons.push(button);
+    }
+    row.append(actions); return row;
+  });
+  list.replaceChildren(...(rows.length?rows:[make('li','muted',handoffTrail.length>1?'这一页已没有待续做便签。':'还没有待续做的便签。')]));
+  if(focus?.source){
+    const next=buttons.find(b=>b.dataset.source===focus.source && b.dataset.action===focus.action) || el('handoffs').querySelector('summary');
+    next.focus({preventScroll:true});
+  }
+}
+async function readHandoffs(){
+  if(!el('handoffs').open || handoffLoading || focusBusy) return;
+  const before=handoffTrail[handoffTrail.length-1], read=++handoffRead;
+  handoffLoading=true;
+  try{
+    const page=await request('/api/focus/handoffs'+(before?'?before='+encodeURIComponent(before):''));
+    if(read!==handoffRead || !el('handoffs').open) return;
+    handoffOnline=true; handoffNext=page.next_cursor; renderHandoffs(page.items);
+    el('handoff-error').hidden=true;
+  }catch(error){
+    if(read!==handoffRead) return;
+    handoffOnline=false; handoffNext=null; el('handoff-error').hidden=false;
+    if(!handoffKey) el('handoff-list').replaceChildren();
+  }finally{
+    if(read===handoffRead){
+      handoffLoading=false;
+      el('handoff-pages').hidden=handoffTrail.length===1 && !handoffNext;
+      text('handoff-page','第 '+handoffTrail.length+' 页');
+      el('handoff-prev').disabled=handoffTrail.length===1; el('handoff-next').disabled=!handoffNext;
+      renderHandoffControls();
+    }
+  }
+}
+async function writeHandoff(action,item){
+  if(focusBusy || (action==='resume' && handoffResume && handoffResume.source!==item.id)) return;
+  if(action==='resume' && !handoffResume) rememberResume({source:item.id,id:crypto.randomUUID()});
+  const saving=action==='save', resuming=action==='resume', id=encodeURIComponent(item.id);
+  const path=saving?'/api/focus/'+id+'/handoff':'/api/focus/handoffs/'+id+'/'+action;
+  focusBusy=true; focusRead++; focusLoading=false; handoffRead++; handoffLoading=false; renderFocus();
+  text('handoff-status','正在等待 Orin 确认…');
+  try{
+    const result=await request(path,saving?{body:handoffBody.value}:resuming?{id:handoffResume.id}:{},10000);
+    if(saving){
+      closeHandoff();
+      if(focusSnapshot?.active?.id===item.id) focusSnapshot.active=null;
+      const recent=focusSnapshot?.recent.find(row=>row.id===item.id);
+      if(recent) recent.has_handoff=true;
+    }
+    if(resuming){
+      rememberResume(null);
+      if(result.state==='active' && focusSnapshot) focusSnapshot.active={...result,resume_note:result.resume_note ?? item.body};
+    }
+    text('handoff-status',resuming?(result.state==='active'?'已接着上次的主题开始专注。':'该次接续已结束。'):
+      result.status==='pending'?'便签已保存到「待续做」。':result.status==='dismissed'?'便签已归档。':'这条便签已接续。');
+  }catch(error){
+    if(resuming && error.status>=400 && error.status<500) rememberResume(null);
+    text('handoff-status',error.status?error.message:'未收到操作结果，请核对后重试。');
+  }finally{
+    await syncFocus(true);
+    focusBusy=false; renderFocus();
+    if(el('handoffs').open) void readHandoffs();
+    if(document.activeElement===document.body) el('focus-heading').focus({preventScroll:true});
+  }
+}
+el('handoff-retry-resume').onclick=()=>{if(handoffResume) void writeHandoff('resume',{id:handoffResume.source})};
 setInterval(tickFocus,1000);
 let inboxView='open', inboxTrail=[null], inboxNext=null, inboxSignature='', inboxItems=[];
 let inboxPage=0, inboxRead=0, inboxReading='', revealTaskId=null;

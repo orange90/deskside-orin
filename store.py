@@ -60,6 +60,14 @@ def initialize():
                 CHECK((state='active' AND ended_at IS NULL) OR
                       (state!='active' AND ended_at IS NOT NULL AND ended_at BETWEEN started_at AND due_at)));
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_focus ON focus_sessions(state) WHERE state='active';
+            CREATE TABLE IF NOT EXISTS focus_handoffs (
+                sequence INTEGER PRIMARY KEY, source_session_id TEXT NOT NULL UNIQUE REFERENCES focus_sessions(id),
+                body TEXT NOT NULL, created_at REAL NOT NULL, resolved_at REAL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','resumed','dismissed')),
+                resumed_session_id TEXT UNIQUE REFERENCES focus_sessions(id),
+                CHECK((status='pending') = (resolved_at IS NULL)),
+                CHECK((status='resumed') = (resumed_session_id IS NOT NULL)));
+            CREATE INDEX IF NOT EXISTS pending_focus_handoffs ON focus_handoffs(sequence) WHERE status='pending';
             CREATE TABLE IF NOT EXISTS camera_pauses (
                 id TEXT PRIMARY KEY, minutes INTEGER NOT NULL CHECK(minutes IN (1,15,30,60)),
                 started_at REAL NOT NULL, until REAL NOT NULL CHECK(until>started_at),

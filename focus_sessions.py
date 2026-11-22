@@ -10,6 +10,26 @@ class FocusConflict(Exception):
     pass
 
 
+SESSION_SELECT = """SELECT s.*,
+    EXISTS(SELECT 1 FROM focus_handoffs h WHERE h.source_session_id=s.id) AS has_handoff,
+    CASE WHEN s.state='active' THEN (SELECT h.body FROM focus_handoffs h WHERE h.resumed_session_id=s.id)
+    END AS resume_note FROM focus_sessions s """
+
+
+def _session(row):
+    if row is None:
+        return None
+    result = dict(row)
+    result['has_handoff'] = bool(result['has_handoff'])
+    if result['resume_note'] is None:
+        del result['resume_note']
+    return result
+
+
+def get_session(db, session_id):
+    return _session(db.execute(SESSION_SELECT + "WHERE s.id=?", (session_id,)).fetchone())
+
+
 def _session_id(value):
     try:
         return str(UUID(str(value)))
@@ -22,6 +42,28 @@ def _time(now):
     if not math.isfinite(now):
         raise ValueError("计时时间无效")
     return now
+
+
+def insert_session(db, session_id, minutes, title, task_id, now, *, continuing=False):
+    """Insert inside the caller's settled write transaction using the shared single-timer rule."""
+    if db.execute("SELECT 1 FROM focus_sessions WHERE state='active'").fetchone():
+        raise FocusConflict("已有进行中的专注计时")
+    if task_id is not None:
+        task = db.execute(
+            "SELECT t.kind,t.body,c.task_id AS done FROM tasks t "
+            "LEFT JOIN completed_todos c ON t.id=c.task_id WHERE t.id=?", (task_id,)).fetchone()
+        if task is None or task['kind'] != 'todo' or task['done'] is not None:
+            if continuing:
+                task_id = None
+            elif task is None:
+                raise KeyError("找不到该待办")
+            else:
+                raise FocusConflict("只能从未完成的待办开始专注")
+        elif not continuing:
+            title = task['body']
+    db.execute(
+        "INSERT INTO focus_sessions(id,title,minutes,task_id,started_at,due_at,state) "
+        "VALUES (?,?,?,?,?,?,'active')", (session_id, title, minutes, task_id, now, now + minutes * 60))
 
 
 def start(session_id, minutes, title=None, task_id=None, now=None):
@@ -37,27 +79,23 @@ def start(session_id, minutes, title=None, task_id=None, now=None):
         db.execute("BEGIN IMMEDIATE")
         now = _time(now)
         store.settle_due_focus(db, now)
-        previous = db.execute("SELECT * FROM focus_sessions WHERE id=?", (session_id,)).fetchone()
+        previous = get_session(db, session_id)
         if previous:
             if (previous['minutes'] != minutes or previous['task_id'] != task_id or
                     (task_id is None and previous['title'] != title)):
                 raise FocusConflict("该请求编号已用于其他专注计时")
-            return dict(previous)
-        if db.execute("SELECT 1 FROM focus_sessions WHERE state='active'").fetchone():
-            raise FocusConflict("已有进行中的专注计时")
-        if task_id is not None:
-            task = db.execute(
-                "SELECT t.kind,t.body,c.task_id AS done FROM tasks t "
-                "LEFT JOIN completed_todos c ON t.id=c.task_id WHERE t.id=?", (task_id,)).fetchone()
-            if task is None:
-                raise KeyError("找不到该待办")
-            if task['kind'] != 'todo' or task['done'] is not None:
-                raise FocusConflict("只能从未完成的待办开始专注")
-            title = task['body']
-        db.execute(
-            "INSERT INTO focus_sessions(id,title,minutes,task_id,started_at,due_at,state) "
-            "VALUES (?,?,?,?,?,?,'active')", (session_id, title, minutes, task_id, now, now + minutes * 60))
-        return dict(db.execute("SELECT * FROM focus_sessions WHERE id=?", (session_id,)).fetchone())
+            return previous
+        insert_session(db, session_id, minutes, title, task_id, now)
+        return get_session(db, session_id)
+
+
+def stop_session(db, session_id, now):
+    db.execute("UPDATE focus_sessions SET state='stopped',ended_at=max(started_at,?) "
+               "WHERE id=? AND state='active'", (now, session_id))
+    session = get_session(db, session_id)
+    if session is None:
+        raise KeyError("找不到该次专注计时")
+    return session
 
 
 def finish(session_id, now=None):
@@ -66,12 +104,7 @@ def finish(session_id, now=None):
         db.execute("BEGIN IMMEDIATE")
         now = _time(now)
         store.settle_due_focus(db, now)
-        db.execute("UPDATE focus_sessions SET state='stopped',ended_at=max(started_at,?) "
-                   "WHERE id=? AND state='active'", (now, session_id))
-        row = db.execute("SELECT * FROM focus_sessions WHERE id=?", (session_id,)).fetchone()
-        if row is None:
-            raise KeyError("找不到该次专注计时")
-        return dict(row)
+        return stop_session(db, session_id, now)
 
 
 def snapshot(now=None):
@@ -79,6 +112,6 @@ def snapshot(now=None):
         db.execute("BEGIN IMMEDIATE")
         now = _time(now)
         store.settle_due_focus(db, now)
-        active = db.execute("SELECT * FROM focus_sessions WHERE state='active'").fetchone()
-        recent = db.execute("SELECT * FROM focus_sessions WHERE state!='active' ORDER BY rowid DESC LIMIT 5")
-        return {'active': dict(active) if active else None, 'recent': [dict(row) for row in recent], 'server_now': now}
+        active = db.execute(SESSION_SELECT + "WHERE s.state='active'").fetchone()
+        recent = db.execute(SESSION_SELECT + "WHERE s.state!='active' ORDER BY s.rowid DESC LIMIT 5")
+        return {'active': _session(active), 'recent': [_session(row) for row in recent], 'server_now': now}
