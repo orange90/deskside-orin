@@ -6,7 +6,15 @@ const el=id=>{if(!controls.has(id))controls.set(id,new Node());return controls.g
 const start=Date.parse('2026-11-11T00:00:00+08:00')/1000;
 const fixture={date:'2026-11-11',today:'2026-11-11',first_date:'2026-11-10',start,end:start+86400,cutoff:start+3600,as_of:start+3600,totals:{sit:120},settings:{sit_minutes:50,stand_minutes:60},intervals:[],notes:[{kind:'reminder',body:'本地文字提醒',start,end:start,count:1}],active_reminders:[],tasks:[],camera:{ready:true,person:'sit',presence:'present',fps:6},hourly:Array.from({length:24},(_,hour)=>({hour,sit:0,stand:0,away:0,unknown:0,privacy:0}))};
 const replies={'/api/dashboard':fixture,'/api/hardware':{latest:null,history:[]},'/api/models':{components:[{id:'asr',model:'Whisper small'}]},'/api/voice/start':{},'/api/voice/stop':{query:'今天坐了多久',answer:'今天坐了 2 分钟'}};
-const context=vm.createContext({AbortSignal,document:{getElementById:el,createElement:()=>new Node(),createElementNS:()=>new Node(),createTextNode:text=>({textContent:text}),querySelectorAll:()=>[],querySelector:el,addEventListener(){},hidden:false},localStorage:{getItem:key=>storage.get(key),setItem:(k,v)=>storage.set(k,v)},setInterval(){},setTimeout(){},clearTimeout(){},crypto:{randomUUID:()=> 'fixture'},fetch:async(path,options)=>{requests.push({path,body:options.body?JSON.parse(options.body):null});return{ok:true,json:async()=>replies[path.split('?')[0]]}},console});
+const inboxTabs = ['open', 'done', 'reminders'].map(view => {
+  const tab = new Node();
+  tab.dataset.inbox = view;
+  return tab;
+});
+const todo = {id:'legacy / 1', body:'核对周报', completed:false};
+replies['/api/todos'] = {items:[todo], next_cursor:null};
+replies['/api/todos/completion'] = {...todo, completed:true};
+const context=vm.createContext({AbortSignal,document:{getElementById:el,createElement:()=>new Node(),createElementNS:()=>new Node(),createTextNode:text=>({textContent:text}),querySelectorAll:selector=>selector==='[data-inbox]'?inboxTabs:[],querySelector:el,addEventListener(){},hidden:false},localStorage:{getItem:key=>storage.get(key),setItem:(k,v)=>storage.set(k,v)},setInterval(){},setTimeout(){},clearTimeout(){},crypto:{randomUUID:()=> 'fixture'},fetch:async(path,options)=>{requests.push({path,body:options.body?JSON.parse(options.body):null});return{ok:true,json:async()=>replies[path.split('?')[0]]}},console});
 const html=fs.readFileSync(0,'utf8');vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
 (async()=>{await new Promise(setImmediate);await el('voice').onclick();await el('voice').onclick();await new Promise(setImmediate);
 assert.deepEqual(requests.filter(x=>x.path.startsWith('/api/voice/')), [{path:'/api/voice/start',body:{}},{path:'/api/voice/stop',body:{id:'fixture',save:false}}]);assert.match(el('feedback').textContent,/识别到：今天坐了多久\n本机回复：今天坐了 2 分钟/);assert.match(el('reminder-notes').children[0].textContent,/本地文字提醒/);
@@ -42,4 +50,17 @@ assert.equal(el('connection').textContent,'连接中断');assert.equal(el('live-
 context.fetch=workingFetch;fixture.date=fixture.today;
 el('today').onclick(); await new Promise(setImmediate);
 assert.equal(el('day').value,'2026-11-12');assert.match(el('connection').textContent,/已连接/);
-console.log('Dashboard voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});
+const taskBox = () => el('tasks').children[0].children[0].children[0];
+assert.equal(taskBox().dataset.taskId, todo.id);
+assert.equal(taskBox().checked, false);
+replies['/api/todos'] = {items:[], next_cursor:null};
+await taskBox().onchange();
+await new Promise(setImmediate);
+assert.deepEqual(requests.find(r=>r.path==='/api/todos/completion').body, {id:todo.id, completed:true});
+assert.match(el('tasks').children[0].textContent,/没有待处理/);
+replies['/api/todos'] = {items:[{...todo, completed:true}], next_cursor:null};
+inboxTabs[1].onclick();
+await new Promise(setImmediate);
+assert.equal(taskBox().checked, true);
+assert.ok(requests.some(r=>r.path==='/api/todos?completed=true'));
+console.log('Dashboard todo, voice, privacy, continuity, goal, date rollover, disconnect and recovery PASS')})().catch(e=>{console.error(e);process.exitCode=1});

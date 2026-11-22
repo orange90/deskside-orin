@@ -15,7 +15,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 import store
 import model_registry
@@ -472,6 +472,11 @@ class AbsenceRange(BaseModel):
     request_id: uuid.UUID | None = None
 
 
+class TodoCompletion(BaseModel):
+    id: str = Field(strict=True, min_length=1)
+    completed: StrictBool
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return (ROOT / "dashboard.html").read_text()
@@ -496,6 +501,26 @@ def state():
 class ModelSelection(BaseModel):
     component: str
     model: str
+
+
+@app.get("/api/todos")
+def todos(completed: bool = False, before: str | None = None):
+    try:
+        return store.list_todos(completed, before)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/todos/completion")
+def todo_completion(item: TodoCompletion):
+    try:
+        return store.set_todo_completed(item.id, item.completed)
+    except KeyError:
+        raise HTTPException(404, "找不到该待办") from None
+    except store.TodoConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/api/reminders")

@@ -39,6 +39,9 @@ def initialize():
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL,
                 due REAL, fired INTEGER NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS tasks_by_kind ON tasks(kind);
+            CREATE TABLE IF NOT EXISTS completed_todos (
+                task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS activity_annotations (
                 id INTEGER PRIMARY KEY, start REAL NOT NULL, end REAL NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('sit','stand','away')),
@@ -174,6 +177,53 @@ def task(request_id, kind, body, minutes=None):
         if row["kind"] != kind or row["body"] != body:
             raise ValueError("该请求编号已使用")
         return dict(row)
+
+
+def list_todos(completed=False, before=None):
+    if not isinstance(completed, bool):
+        raise ValueError("完成状态应为布尔值")
+    upper_bound = 2 ** 63 - 1
+    if before is not None:
+        cursor = str(before)
+        if len(cursor) > 19 or not cursor.isascii() or not cursor.isdecimal():
+            raise ValueError("待办分页游标无效")
+        position = int(cursor)
+        if not 1 <= position <= upper_bound:
+            raise ValueError("待办分页游标超出范围")
+        upper_bound = position - 1
+    page_size = 20
+    with database() as db:
+        rows = db.execute(
+            "SELECT t.rowid AS position,t.id,t.body FROM tasks t "
+            "LEFT JOIN completed_todos c ON t.id=c.task_id "
+            "WHERE t.kind='todo' AND t.rowid<=? AND (c.task_id IS NOT NULL)=? "
+            "ORDER BY t.rowid DESC LIMIT ?", (upper_bound, completed, page_size + 1)).fetchall()
+    page = rows[:page_size]
+    return {"items": [dict(id=row['id'], body=row['body'], completed=completed) for row in page],
+            "next_cursor": str(page[-1]['position']) if len(rows) > page_size else None}
+
+
+class TodoConflict(Exception):
+    pass
+
+
+def set_todo_completed(task_id, completed):
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("待办编号不能为空")
+    if not isinstance(completed, bool):
+        raise ValueError("完成状态应为布尔值")
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT kind,body FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        if row['kind'] != 'todo':
+            raise TodoConflict("仅待办事项可以完成或恢复")
+        if completed:
+            db.execute("INSERT OR IGNORE INTO completed_todos(task_id) VALUES (?)", (task_id,))
+        else:
+            db.execute("DELETE FROM completed_todos WHERE task_id=?", (task_id,))
+        return {"id": task_id, "body": row['body'], "completed": completed}
 
 
 def record_due_reminders():
