@@ -52,6 +52,16 @@ def initialize():
                 CHECK((state='active' AND ended_at IS NULL) OR
                       (state!='active' AND ended_at IS NOT NULL AND ended_at BETWEEN started_at AND due_at)));
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_focus ON focus_sessions(state) WHERE state='active';
+            CREATE TABLE IF NOT EXISTS field_trials (
+                id TEXT PRIMARY KEY, started_at REAL NOT NULL, deadline REAL NOT NULL CHECK(deadline>started_at),
+                ended_at REAL CHECK(ended_at BETWEEN started_at AND deadline),
+                current_state TEXT NOT NULL CHECK(current_state IN ('sit','stand','away','pause')),
+                marked_at REAL NOT NULL CHECK(marked_at BETWEEN started_at AND deadline));
+            CREATE UNIQUE INDEX IF NOT EXISTS one_active_field_trial ON field_trials((1)) WHERE ended_at IS NULL;
+            CREATE TABLE IF NOT EXISTS field_trial_marks (
+                request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES field_trials(id),
+                at REAL NOT NULL, state TEXT NOT NULL CHECK(state IN ('sit','stand','away','pause')));
+            CREATE INDEX IF NOT EXISTS field_trial_mark_times ON field_trial_marks(session_id,at);
             CREATE TABLE IF NOT EXISTS activity_annotations (
                 id INTEGER PRIMARY KEY, start REAL NOT NULL, end REAL NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('sit','stand','away')),

@@ -72,6 +72,7 @@
 .draft-options{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #voice-draft-count{font-size:12px;font-variant-numeric:tabular-nums}
 #voice-draft-status{color:var(--ink)}#voice-draft-status:empty{display:none}
+.live-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.live-actions a{color:var(--ink);font-size:13px;text-underline-offset:3px}
 .focus-card{margin-top:16px}
 .focus-card .section-head{margin-bottom:12px}
 .focus-form,.focus-running{display:flex;align-items:end;gap:10px;flex-wrap:wrap}
@@ -158,7 +159,7 @@
   <p id="focus-last" class="muted"></p><p id="focus-message" role="status"></p>
   <p id="focus-sync" class="muted"><span id="focus-sync-text">正在连接 Orin…</span> <button type="button" id="focus-retry" hidden>重新同步</button></p>
 </section>
-<section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><button id="live-toggle">开启实时画面</button></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div></div></section>
+<section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><div class="live-actions"><a href="/field-trial">现场核验坐站识别</a><button id="live-toggle">开启实时画面</button></div></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div></div></section>
 <section id="hardware" class="section-block"><div class="section-title"><div><h2>设备的实时脉搏</h2><p>独立实时数据 · 最近 15 分钟趋势 · 每 15 秒采样</p></div><span class="muted" id="hardware-updated">等待采样</span></div><div class="hardware-grid">
 <article class="card hardware-metric"><div class="metric-label">GPU 使用率 <span>GPU</span></div><div class="value" id="gpu-value">—</div><svg id="gpu-spark" class="spark" viewBox="0 0 240 42" aria-label="GPU 使用率趋势"></svg><p class="hardware-sub" id="gpu-sub">等待遥测</p></article>
 <article class="card hardware-metric"><div class="metric-label">统一内存 <span>RAM</span></div><div class="value" id="ram-value">—</div><svg id="ram-spark" class="spark" viewBox="0 0 240 42" aria-label="内存使用趋势"></svg><p class="hardware-sub" id="ram-sub">CPU 与 GPU 共享内存</p></article>

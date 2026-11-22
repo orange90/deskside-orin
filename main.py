@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, StrictBool
 
 import store
 import focus_sessions
+import field_trials
 import interval_corrections
 import activity_evidence
 import model_registry
@@ -507,9 +508,55 @@ class FocusStart(BaseModel):
     task_id: str | None = None
 
 
+class TrialLabel(BaseModel):
+    id: uuid.UUID
+    state: str
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return (ROOT / "dashboard.html").read_text()
+
+
+@app.get("/field-trial", response_class=HTMLResponse)
+def trial_page():
+    return (ROOT / "field-trial.html").read_text()
+
+
+def trial_action(action, *args):
+    try:
+        return action(*args)
+    except KeyError:
+        raise HTTPException(404, "找不到该次姿态核验") from None
+    except field_trials.TrialConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/api/field-trials")
+def trial_status():
+    return field_trials.snapshot()
+
+
+@app.post("/api/field-trials")
+def trial_start(item: TrialLabel):
+    return trial_action(field_trials.start, item.id, item.state)
+
+
+@app.post("/api/field-trials/{session_id}/marks")
+def trial_mark(session_id: uuid.UUID, item: TrialLabel):
+    return trial_action(field_trials.mark, session_id, item.id, item.state)
+
+
+@app.post("/api/field-trials/{session_id}/finish")
+def trial_finish(session_id: uuid.UUID):
+    return trial_action(field_trials.finish, session_id)
+
+
+@app.get("/api/field-trials/{session_id}/report")
+def trial_report(session_id: uuid.UUID):
+    return trial_action(field_trials.report, session_id)
 
 
 def camera_view():
