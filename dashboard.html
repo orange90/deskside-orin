@@ -63,6 +63,12 @@
 .inbox-pages button,#inbox-retry{font-size:12px;padding:5px 10px}
 #inbox-notice,#inbox-error{font-size:12px;margin-top:8px}
 #inbox-notice:empty{display:none}#inbox-error{color:#875231}
+#voice-draft-form label{font-size:13px}
+#voice-draft-text{display:block;width:100%;min-height:7em;margin:6px 0 10px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font:inherit;resize:vertical}
+#voice-draft-text:focus-visible{outline:3px solid #91b898;outline-offset:3px}
+.draft-options{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#voice-draft-count{font-size:12px;font-variant-numeric:tabular-nums}
+#voice-draft-status{color:var(--ink)}#voice-draft-status:empty{display:none}
 </style>
 </head>
 <body>
@@ -113,7 +119,7 @@
 <div class="flow"><div class="flow-label">语音交互<small>麦克风 → 按需录音</small></div><button class="node" data-model="asr"><span class="node-type">01 / 中文语音识别 <span>↗</span></span><strong id="asr-name">Whisper small</strong><small>点击切换本地模型</small></button><span class="flow-arrow">→</span><button class="node" data-model="qwen"><span class="node-type">02 / 规则路由 + 问答 <span>↗</span></span><strong>Qwen3.5-4B</strong><small>开放问答 · 任务解析</small></button><span class="flow-arrow">→</span><div class="node node-output"><span class="node-type">03 / 本地执行</span><strong>文字回复与记录</strong><small>SQLite · 待办 · 提醒</small></div></div><div class="flow-footer"><span>视觉结果 → 稳定状态判断 → 本地记录 → 活动图表</span><span>统计查询与明确任务直接读写本地数据</span></div></div></section>
 <div class="lower-grid"><section class="card" id="records"><div class="section-head"><h2>活动时间段</h2><span class="muted" id="interval-count"></span></div><div class="tabs" role="group" aria-label="记录类型"><button class="active" data-kind="person">坐站与离开</button><button data-kind="presence">工位在位</button><button data-kind="desk">桌面档位</button></div><ul id="timeline" class="record-list"></ul><button id="more-intervals" class="more" hidden>查看更多时间段</button></section>
 <section class="card"><div class="section-head"><h2>这一段，发生了什么</h2><span class="muted" id="summary-count"></span></div><div class="tabs" role="group" aria-label="摘要类型"><button class="active" data-note="cosmos">画面摘要</button><button data-note="dialogue">已保存对话</button><button data-note="reminder">提醒</button></div><div id="notes" class="record-list"></div><button id="more-notes" class="more" hidden>查看更多摘要</button><p class="hardware-sub" style="margin-top:15px">相同摘要按连续观察段合并；时间范围表示首末采样时刻。原始记录保留。</p></section></div>
-<section id="assistant" class="ask-grid"><div class="card"><div class="section-head"><div><h2>和本地助手聊聊</h2><p class="muted">查询坐站记录，添加待办，或设置文字提醒</p></div><span style="color:#789368">✳</span></div><form id="question" class="ask-form"><input id="query" maxlength="500" placeholder="我今天坐了多久？" aria-label="向本地助手提问" required><button id="send" class="primary">发送</button></form><div class="voice-row"><button id="voice">开始语音提问</button><span>使用 Orin 麦克风</span><label><input id="save" type="checkbox">保存这次对话</label></div><p id="feedback" class="feedback" role="status">答复会显示在这里。</p><ul id="reminder-notes"></ul></div><section class="card" id="inbox" aria-labelledby="inbox-title">
+<section id="assistant" class="ask-grid"><div class="card"><div class="section-head"><div><h2>和本地助手聊聊</h2><p class="muted">查询坐站记录，添加待办，或设置文字提醒</p></div><span style="color:#789368">✳</span></div><form id="question" class="ask-form"><input id="query" maxlength="500" placeholder="我今天坐了多久？" aria-label="向本地助手提问" required><button id="send" class="primary">发送</button></form><div class="voice-row"><button id="voice">开始语音提问</button><span>使用 Orin 麦克风</span><label><input id="voice-review" type="checkbox">校对后发送</label><label><input id="save" type="checkbox">保存这次对话</label></div><p id="feedback" class="feedback" role="status">答复会显示在这里。</p><ul id="reminder-notes"></ul></div><section class="card" id="inbox" aria-labelledby="inbox-title">
   <div class="section-head"><h2 id="inbox-title">待办与提醒</h2></div>
   <div class="tabs" role="group" aria-label="待办与提醒分类">
     <button type="button" data-inbox="open" class="active" aria-pressed="true">待办</button>
@@ -130,6 +136,19 @@
 <details id="settings-panel" class="card details" style="margin-top:20px"><summary>目标设置与摄像头选区</summary><form id="settings" class="settings-grid"><label>每日站立目标 / 分钟<input id="stand" type="number" min="1" max="1440" required></label><label>连续久坐提醒 / 分钟<input id="sit" type="number" min="1" max="1440" required></label><button class="primary">保存设置</button></form><div class="calibration"><p>坐站使用相对姿态估计，无需贴标或记录固定高度。桌沿档位校准可选。预览中点击两个对角可设置选区。</p><button id="show">查看当前画面</button><select id="region" aria-label="摄像头选区类型"><option value="person">桌前人物区域</option><option value="cosmos">Cosmos 摘要区域</option><option value="desk">桌沿区域</option></select><div><img id="frame" hidden alt="当前本机摄像头画面"></div><button data-point="low">记录桌低档</button><button data-point="high">记录桌高档</button></div></details>
 <footer class="footer"><span>桌间 · DESKSIDE &nbsp; / &nbsp; 本地感知，安静陪伴</span><span id="updated">图表每 15 秒静默更新 · 历史数据保留</span></footer>
 </main><div id="tooltip" class="tooltip" role="tooltip" hidden></div><div id="toast" class="toast" role="status" hidden></div>
+<dialog class="modal" id="voice-draft" aria-labelledby="voice-draft-title">
+  <div class="modal-head"><h2 id="voice-draft-title">校对语音草稿</h2></div>
+  <form id="voice-draft-form">
+    <label for="voice-draft-text">识别文字</label>
+    <textarea id="voice-draft-text" rows="5" autofocus aria-describedby="voice-draft-count"></textarea>
+    <div class="draft-options">
+      <label><input id="voice-draft-save" type="checkbox">保存这次对话</label>
+      <span id="voice-draft-count" class="muted"></span>
+    </div>
+    <p id="voice-draft-status" role="status"></p>
+    <div class="modal-actions"><button id="voice-draft-discard" type="button">放弃草稿</button><button id="voice-draft-send" class="primary">发送给助手</button></div>
+  </form>
+</dialog>
 <dialog id="absence-modal" class="modal" aria-labelledby="absence-title" aria-describedby="absence-description">
   <div class="modal-head"><h2 id="absence-title">确认本人离开</h2><button id="close-absence" type="button" aria-label="关闭校正窗口">×</button></div>
   <p id="absence-description">选择你全天未到工位的日期，可连续选 1 至 31 天，按北京时间计算。已采集的个人活动按离开统计。隐私时段、采集空档和原始记录均保留。</p>
@@ -436,8 +455,8 @@ function updateInbox(){
     selectInbox(created.kind==='reminder'?'reminders':'open');
   }else void readInbox();
 }
-async function queryWithTaskId(path,body){
-  const id=crypto.randomUUID(), reply=await request(path,{...body,id});
+async function queryWithTaskId(path,body,id=crypto.randomUUID(),timeout){
+  const reply=await request(path,{...body,id},timeout);
   revealTaskId=id;
   return reply;
 }
@@ -615,7 +634,88 @@ el('previous').onclick=()=>changeDay(-1);el('next').onclick=()=>changeDay(1);el(
 document.querySelectorAll('[data-kind]').forEach(b=>b.onclick=()=>{selectedKind=b.dataset.kind;intervalLimit=20;document.querySelectorAll('[data-kind]').forEach(x=>x.classList.toggle('active',x===b));if(data)renderIntervals()});document.querySelectorAll('[data-note]').forEach(b=>b.onclick=()=>{selectedNote=b.dataset.note;noteLimit=12;document.querySelectorAll('[data-note]').forEach(x=>x.classList.toggle('active',x===b));if(data)renderNotes()});el('more-intervals').onclick=()=>{intervalLimit+=30;renderIntervals()};el('more-notes').onclick=()=>{noteLimit+=20;renderNotes()};
 async function action(fn){try{await fn();await refresh()}catch(e){text('feedback',e.message);notify(e.message)}}
 el('question').onsubmit=e=>{e.preventDefault();action(async()=>{el('send').disabled=true;text('feedback','正在本机生成答复…');try{const r=await queryWithTaskId('/api/query',{text:el('query').value,save:el('save').checked});text('feedback',r.answer)}finally{el('send').disabled=false}})};
-el('voice').onclick=()=>action(async()=>{const b=el('voice');b.disabled=true;try{if(!recording){await request('/api/voice/start',{});recording=true;b.textContent='结束录音';text('feedback','正在使用 Orin 麦克风，最长 15 秒。说完后点击结束录音。')}else{recording=false;b.textContent='开始语音提问';text('feedback','正在本机识别和生成答复…');const r=await queryWithTaskId('/api/voice/stop',{save:el('save').checked});text('feedback','识别到：'+r.query+'\n本机回复：'+r.answer)}}finally{b.disabled=false}});
+const reviewVoice=el('voice-review'), draftDialog=el('voice-draft'), draftText=el('voice-draft-text');
+let reviewThisRecording=false, draftSending=false, draftAttempt=null;
+try{reviewVoice.checked=localStorage.getItem('deskside-voice-review')==='yes'}catch{}
+reviewVoice.onchange=()=>{
+  try{localStorage.setItem('deskside-voice-review',reviewVoice.checked?'yes':'no')}catch{}
+};
+function updateDraftControls(){
+  const length=Array.from(draftText.value.trim()).length;
+  text('voice-draft-count',length>500?'请精简到 500 字以内 · 当前 '+length+' 字':length+' / 500 字');
+  el('voice-draft-send').disabled=draftSending || !length || length>500;
+  el('voice-draft-discard').disabled=el('voice-draft-save').disabled=draftSending;
+  draftText.readOnly=draftSending;
+}
+function openVoiceDraft(query){
+  draftText.value=query;
+  el('voice-draft-save').checked=el('save').checked;
+  text('voice-draft-status','');
+  draftAttempt=null;
+  updateDraftControls();
+  draftDialog.showModal();
+}
+function discardVoiceDraft(){
+  if(draftSending) return;
+  draftDialog.close();
+  text('feedback','已放弃语音草稿。');
+}
+draftText.oninput=updateDraftControls;
+el('voice-draft-discard').onclick=discardVoiceDraft;
+draftDialog.oncancel=e=>{e.preventDefault();discardVoiceDraft()};
+draftDialog.onclose=()=>{
+  draftText.value=''; draftAttempt=null; text('voice-draft-status','');
+  el('voice').focus({preventScroll:true});
+};
+el('voice-draft-form').onsubmit=async e=>{
+  e.preventDefault();
+  if(!draftDialog.open || draftSending) return;
+  updateDraftControls();
+  if(el('voice-draft-send').disabled) return;
+  const query=draftText.value.trim(), save=el('voice-draft-save').checked;
+  if(draftAttempt?.query!==query) draftAttempt={id:crypto.randomUUID(),query};
+  draftSending=true; updateDraftControls();
+  text('voice-draft-status','正在等待本机答复…');
+  try{
+    const reply=await queryWithTaskId('/api/query',{text:query,save},draftAttempt.id,60000);
+    el('save').checked=save;
+    text('feedback','已发送：'+query+'\n本机回复：'+reply.answer);
+    draftDialog.close();
+    void refresh();
+  }catch(error){
+    text('voice-draft-status',error.status?error.message:'未收到本机答复。草稿已保留，可重试。');
+  }finally{
+    draftSending=false; updateDraftControls();
+  }
+};
+el('voice').onclick=()=>action(async()=>{
+  const button=el('voice');
+  if(button.disabled || draftDialog.open) return;
+  button.disabled=true;
+  try{
+    if(!recording){
+      reviewThisRecording=reviewVoice.checked;
+      reviewVoice.disabled=true;
+      await request('/api/voice/start',{});
+      recording=true; button.textContent='结束录音';
+      text('feedback','正在使用 Orin 麦克风，最长 15 秒。说完后点击结束录音。');
+    }else{
+      recording=false; button.textContent='开始语音提问';
+      if(reviewThisRecording){
+        text('feedback','正在本机转写…');
+        const draft=await request('/api/voice/draft',{},45000);
+        openVoiceDraft(draft.query);
+        text('feedback','语音已转写，等待校对发送。');
+      }else{
+        text('feedback','正在本机识别和生成答复…');
+        const reply=await queryWithTaskId('/api/voice/stop',{save:el('save').checked});
+        text('feedback','识别到：'+reply.query+'\n本机回复：'+reply.answer);
+      }
+    }
+  }finally{
+    button.disabled=false; reviewVoice.disabled=recording;
+  }
+});
 el('settings').onsubmit=e=>{e.preventDefault();action(async()=>{await request('/api/settings',{stand_minutes:+el('stand').value,sit_minutes:+el('sit').value});notify('目标与提醒设置已保存')})};
 el('show').onclick=()=>{el('frame').src='/api/calibration/frame?t='+Date.now();el('frame').hidden=false};el('region').onchange=()=>corner=null;el('frame').onclick=e=>action(async()=>{const r=el('frame').getBoundingClientRect(),xy=[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height];if(!corner){corner=xy;notify('请点击选区另一角');return}const box=[Math.min(corner[0],xy[0]),Math.min(corner[1],xy[1]),Math.max(corner[0],xy[0]),Math.max(corner[1],xy[1])];corner=null;await request('/api/region/'+el('region').value,{box});notify('选区已保存')});document.querySelectorAll('[data-point]').forEach(b=>b.onclick=()=>action(async()=>{await request('/api/calibration/'+b.dataset.point,{});notify(b.textContent+'已保存')}));
 function openModel(id){if(!catalog)return;const c=catalog.components.find(c=>c.id===id);modelComponent=c;text('model-title',c.title+' · '+c.model);text('model-description',c.description+' '+c.engine+'。'+c.memory_note);el('model-options').replaceChildren(...c.options.map(o=>{const label=make('label','model-option'),input=make('input');input.type='radio';input.name='model';input.value=o.id;input.checked=o.id===c.selected;input.disabled=!o.installed||c.options.length<2;label.append(input,make('b','',o.name+(o.id===c.selected?' · 当前':'')),make('small','',`权重 ${weightLabel(o.weights_bytes)} · 预计内存 ${memoryLabel(o)}`),make('small','',o.note+(!o.installed?' · 未安装':'')));return label}));text('model-notice',id==='asr'?'应用后从下一次语音提问生效。可随时切回 small；不改变历史记录。':'本机目前只有一个已适配选项，暂不能切换其他模型。');el('apply-model').hidden=c.options.filter(o=>o.installed).length<2;text('model-result','');el('model-modal').showModal()}

@@ -5,6 +5,7 @@ import wave
 import os
 import signal
 import subprocess
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 import tempfile
 import threading
@@ -262,6 +263,11 @@ def activity_answer(query, now=None):
 
 
 def respond(query, request_id, save, voice_reply=False):
+    if save:
+        previous = store.previous_answer(request_id, query)
+        if previous is not None:
+            return previous
+    new_task = None
     instruction = explicit_tool(query)
     answer = activity_answer(query) if instruction is None else None
     if answer is None:
@@ -291,7 +297,7 @@ def respond(query, request_id, save, voice_reply=False):
             body = body.rstrip("。！？!?").strip()
             if not body:
                 raise ValueError("待办内容不能为空")
-            store.task(request_id, action, body)
+            new_task = {"kind": action, "body": body}
             answer = f"已添加待办，{body}。"
         elif action == "reminder":
             body = body.rstrip("。！？!?").strip()
@@ -300,13 +306,11 @@ def respond(query, request_id, save, voice_reply=False):
             minutes = instruction.get("minutes")
             if type(minutes) is not int or not 1 <= minutes <= 1440:
                 raise ValueError("请提供 1 到 1440 分钟内的提醒时间")
-            store.task(request_id, action, body, minutes)
+            new_task = {"kind": action, "body": body, "minutes": minutes}
             answer = f"已设置 {minutes} 分钟后的提醒，{body}。"
         else:
             raise ValueError("模型请求了未知操作")
-    if save:
-        store.note("dialogue", f"你：{query}\n助手：{answer}")
-    return answer
+    return store.record_answer(request_id, query, answer, save, new_task)
 
 
 class Voice:
@@ -337,8 +341,6 @@ class Voice:
                 raise ValueError("语音正在处理中")
             if self.recording:
                 raise ValueError("已经在录音")
-            temp = tempfile.TemporaryDirectory(prefix="orin-voice-", dir="/dev/shm")
-            path = os.path.join(temp.name, "query.pcm")
             command = ["timeout", "--signal=INT", "15s", "parecord", "--raw",
                        "--rate=16000", "--channels=1", "--format=s16le",
                        "--latency-msec=60", "--process-time-msec=20"]
@@ -347,11 +349,12 @@ class Voice:
                 ["pactl", "get-source-mute", source], env=self.env, capture_output=True,
                 text=True, timeout=3, check=True
             ).stdout.strip().endswith("yes")
-            if muted:
-                self.set_mute(source, True, value=0)
             command.extend(["--device", source])
+            temp = tempfile.TemporaryDirectory(prefix="orin-voice-", dir="/dev/shm")
+            path = os.path.join(temp.name, "query.pcm")
             proc = None
             try:
+                self.set_mute(source, muted, value=0)
                 proc = subprocess.Popen([*command, path], env=self.env, stderr=subprocess.PIPE,
                                         start_new_session=True)
                 capture = Path(path)
@@ -360,19 +363,10 @@ class Voice:
                     if proc.poll() is not None or time.monotonic() >= deadline:
                         raise ValueError("麦克风未就绪")
                     time.sleep(.02)
-            except (OSError, ValueError):
+            except (OSError, ValueError, subprocess.SubprocessError):
                 try:
                     if proc is not None:
-                        if proc.poll() is None:
-                            proc.send_signal(signal.SIGINT)
-                        try:
-                            proc.communicate(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            try:
-                                os.killpg(proc.pid, signal.SIGKILL)
-                            except ProcessLookupError:
-                                pass
-                            proc.communicate()
+                        self._stop_capture(proc, timeout=2)
                 finally:
                     try:
                         self.set_mute(source, muted, value=1)
@@ -402,11 +396,29 @@ class Voice:
     def discard(self, proc):
         with self.lock:
             if self.recording and self.recording[2] is proc:
-                self.recording[0].cleanup()
+                temp = self.recording[0]
                 self.recording = None
+                temp.cleanup()
 
-    def stop(self, request_id, save):
-        start = time.monotonic()
+    @staticmethod
+    def _stop_capture(proc, timeout):
+        if proc.poll() is None:
+            try:
+                proc.send_signal(signal.SIGINT)
+            except ProcessLookupError:
+                pass
+        try:
+            proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # parecord belongs to the timeout wrapper's process group.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+
+    @contextmanager
+    def _transcript(self):
         with self.lock:
             if not self.recording:
                 raise ValueError("没有活动录音")
@@ -414,9 +426,7 @@ class Voice:
             self.recording = None
             self.busy.set()
         try:
-            if proc.poll() is None:
-                proc.send_signal(2)
-            proc.communicate(timeout=5)
+            self._stop_capture(proc, timeout=5)
             self.set_mute(source, muted, value=1)
             muted = False
             if not os.path.isfile(path) or os.path.getsize(path) < 3200:
@@ -428,18 +438,30 @@ class Voice:
                 audio.writeframes(pcm[:len(pcm) - len(pcm) % 2])
             model = model_registry.asr_path()
             query = self.transcribe(wav_path, model)
-            if not query:
+            if not query or not query.strip():
                 raise ValueError("没有识别到语音")
-            answer = respond(query, request_id, save, True)
-            seconds = round(time.monotonic() - start, 3)
-            return {"query": query, "answer": answer, "answer_ready_seconds": seconds,
-                    "seconds": seconds}
+            yield query
         finally:
             try:
                 self.set_mute(source, muted, value=1)
             finally:
-                temp.cleanup()
-                self.busy.clear()
+                try:
+                    temp.cleanup()
+                finally:
+                    self.busy.clear()
+
+    def draft(self):
+        start = time.monotonic()
+        with self._transcript() as query:
+            return {"query": query, "draft": True, "seconds": round(time.monotonic() - start, 3)}
+
+    def stop(self, request_id, save):
+        start = time.monotonic()
+        with self._transcript() as query:
+            answer = respond(query, request_id, save, True)
+            seconds = round(time.monotonic() - start, 3)
+            return {"query": query, "answer": answer, "answer_ready_seconds": seconds,
+                    "seconds": seconds}
 
     def transcribe(self, path, model, prompt=ASR_HINT):
         import audioop

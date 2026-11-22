@@ -36,6 +36,9 @@ def initialize():
             CREATE TABLE IF NOT EXISTS notes (
                 id INTEGER PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL,
                 at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS saved_replies (
+                request_id TEXT PRIMARY KEY, note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                reply_offset INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL,
                 due REAL, fired INTEGER NOT NULL DEFAULT 0);
@@ -168,15 +171,57 @@ def snapshot(now=None):
         }
 
 
-def task(request_id, kind, body, minutes=None):
+def _insert_task(db, request_id, kind, body, minutes=None):
     due = (datetime.now(TZ) + timedelta(minutes=minutes)).timestamp() if minutes else None
+    db.execute("INSERT OR IGNORE INTO tasks(id,kind,body,due) VALUES (?,?,?,?)",
+               (request_id, kind, body, due))
+    row = db.execute("SELECT kind,body,due FROM tasks WHERE id=?", (request_id,)).fetchone()
+    if row["kind"] != kind or row["body"] != body:
+        raise ValueError("该请求编号已使用")
+    return dict(row)
+
+
+def task(request_id, kind, body, minutes=None):
     with database() as db:
-        db.execute("INSERT OR IGNORE INTO tasks(id,kind,body,due) VALUES (?,?,?,?)",
-                   (request_id, kind, body, due))
-        row = db.execute("SELECT kind,body,due FROM tasks WHERE id=?", (request_id,)).fetchone()
-        if row["kind"] != kind or row["body"] != body:
-            raise ValueError("该请求编号已使用")
-        return dict(row)
+        return _insert_task(db, request_id, kind, body, minutes)
+
+
+def _saved_reply(db, request_id, prefix):
+    row = db.execute(
+        "SELECT body,reply_offset FROM saved_replies JOIN notes ON notes.id=note_id WHERE request_id=?",
+        (request_id,)).fetchone()
+    if row is None:
+        return None
+    if row['body'][:row['reply_offset']] != prefix:
+        raise ValueError("该请求编号已用于其他问题")
+    return row['body'][row['reply_offset']:]
+
+
+def previous_answer(request_id, query):
+    with database() as db:
+        return _saved_reply(db, request_id, f"你：{query}\n助手：")
+
+
+def record_answer(request_id, query, answer, save, new_task):
+    if not save:
+        if new_task:
+            task(request_id, **new_task)
+        return answer
+    # A confirmed draft can be retried after a lost HTTP response. Store the
+    # task and the opted-in dialogue together. Keep just one copy of the text.
+    prefix = f"你：{query}\n助手："
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        previous = _saved_reply(db, request_id, prefix)
+        if previous is not None:
+            return previous
+        if new_task:
+            _insert_task(db, request_id, **new_task)
+        note = db.execute("INSERT INTO notes(kind,body,at) VALUES ('dialogue',?,?)",
+                          (prefix + answer, time.time()))
+        db.execute("INSERT INTO saved_replies(request_id,note_id,reply_offset) VALUES (?,?,?)",
+                   (request_id, note.lastrowid, len(prefix)))
+    return answer
 
 
 def list_todos(completed=False, before=None):

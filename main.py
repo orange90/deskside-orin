@@ -674,3 +674,14 @@ def answer(item: Record):
     except Exception as error:
         LOG.exception("Voice request failed")
         raise HTTPException(503, "本地语音处理失败，请查看日志") from error
+
+
+@app.post("/api/voice/draft")
+def voice_draft():
+    try:
+        return voice.draft()
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except Exception as error:
+        LOG.exception("Voice transcription failed")
+        raise HTTPException(503, "本地语音转写失败，请查看日志") from error
