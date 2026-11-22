@@ -63,7 +63,7 @@ def dashboard_snapshot(day=None, now=None):
         rows, annotations = store.activity_window(db, start, cutoff, now.timestamp())
         notes = [dict(r) for r in db.execute(
             'SELECT * FROM notes WHERE at>=? AND at<? ORDER BY at,id', (start, cutoff))]
-        first = db.execute('SELECT MIN(start) FROM intervals').fetchone()[0]
+        first = db.execute("SELECT MIN(start) FROM intervals WHERE kind!='pose_method'").fetchone()[0]
         settings = dict(db.execute('SELECT key,value FROM settings'))
         today_start = datetime.combine(now.date(), time.min, store.TZ).timestamp()
         reminders = [dict(r) for r in db.execute(

@@ -128,7 +128,7 @@ def persist(kind, state, now, continuous):
 
 
 def persist_sample(states, now, continuous):
-    """Commit all three 1 Hz camera timelines together, also guarding wall time."""
+    """Commit sensing intervals and any method tag on the same sampling clock."""
     _record_intervals(states, now, continuous, 3.0)
 
 
@@ -144,7 +144,8 @@ def activity_window(db, start, cutoff, as_of):
     left = start - MAX_GAP_SECONDS - 1
     right = min(as_of, cutoff + MAX_GAP_SECONDS + 1)
     rows = [dict(r) for r in db.execute(
-        'SELECT * FROM intervals WHERE end>? AND start<? ORDER BY start DESC', (left, right))]
+        "SELECT * FROM intervals WHERE kind!='pose_method' AND end>? AND start<? ORDER BY start DESC",
+        (left, right))]
     for row in rows:
         row['end'] = min(row['end'], right)
     annotations = []

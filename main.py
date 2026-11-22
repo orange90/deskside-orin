@@ -21,11 +21,13 @@ from pydantic import BaseModel, Field, StrictBool
 import store
 import focus_sessions
 import interval_corrections
+import activity_evidence
 import model_registry
 from dashboard_data import activity_week, dashboard_snapshot, weekly_markdown
 from telemetry import monitor
 from assistant import Voice, describe_desk_frames, respond
-from state import PersonTrackEvidence, OccupiedPosture, AbsenceEvidence, FrameLight, PresenceContinuity, SittingSession, StableState
+from state import (POSE_METHODS, AbsenceEvidence, FrameLight, OccupiedPosture, PersonTrackEvidence,
+                   PresenceContinuity, SittingSession, StableState)
 
 LOG = logging.getLogger("uvicorn.error")
 ROOT = store.ROOT
@@ -324,7 +326,12 @@ def capture_frames():
             # one-second heartbeat only throttles unchanged observations.
             if states != last_recorded or now - last_db >= 1 or observation_broken:
                 continuous = bool(not observation_broken and last_db and now - last_db < 3 and (ok or was_paused))
-                store.persist_sample(states, captured_at, continuous)
+                # Sample the method on the same clock as the posture. Changes
+                # of method alone never schedule extra frame-rate DB writes.
+                method = "unknown"
+                if ok and not paused and not privacy and pose_source in POSE_METHODS:
+                    method = pose_source
+                store.persist_sample({**states, "pose_method": method}, captured_at, continuous)
                 last_recorded = states
                 observation_broken = False
                 last_db = now
@@ -611,6 +618,14 @@ def dashboard_history(date: str | None = None):
         return {**dashboard_snapshot(date), "camera": camera_view(), "recording": bool(voice.recording)}
     except ValueError:
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+
+
+@app.get("/api/activity/evidence")
+def interval_evidence(date: str, start: float, end: float):
+    try:
+        return activity_evidence.details(date, start, end)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.get("/api/activity/week")

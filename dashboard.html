@@ -87,7 +87,7 @@
 .inbox-task{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .inbox-task label{flex:1;min-width:0}
 .focus-task{flex:none;line-height:1;font-size:18px;padding:5px 8px;border:0;color:var(--green)}
-.interval-edit{margin-left:7px;font-size:11px;padding:2px 7px;border-radius:6px;color:var(--green)}
+.interval-edit,.interval-view{margin-left:7px;font-size:11px;padding:2px 7px;border-radius:6px;color:var(--green)}
 #segment-history{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}
 #segment-history summary{font-size:13px;cursor:pointer}
 #segment-edits{list-style:none;margin:8px 0 0;padding:0;max-height:220px;overflow:auto}
@@ -96,6 +96,15 @@
 #segment-notice{font-size:12px;margin-top:8px}#segment-notice:empty{display:none}
 #segment-status{color:var(--ink)}#segment-status:empty{display:none}
 #segment-details{font-variant-numeric:tabular-nums}
+.evidence-view{border-block:1px solid var(--line);margin:14px 0;padding:12px 0}
+.evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.evidence-grid h4{font-size:12px;margin:4px 0}.evidence-grid dl{margin:0;font-size:12px}
+.evidence-grid dl div{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.evidence-grid dd{margin:0;white-space:nowrap;font-variant-numeric:tabular-nums}
+.evidence-grid dt{overflow-wrap:anywhere}
+#evidence-status{font-size:12px;margin:6px 0}#evidence-status:empty{display:none}
+#evidence-retry{font-size:12px;padding:4px 8px}
+@media(max-width:480px){.evidence-grid{grid-template-columns:1fr;gap:8px}}
 </style>
 </head>
 <body>
@@ -196,8 +205,13 @@
 <dialog id="segment-modal" class="modal" aria-labelledby="segment-title" aria-describedby="segment-details">
   <div class="modal-head"><h2 id="segment-title">校正这段活动</h2></div>
   <p id="segment-details"></p>
+  <section class="evidence-view" aria-labelledby="evidence-heading">
+    <h3 id="evidence-heading">判断依据</h3>
+    <p id="evidence-status" role="status"></p><button id="evidence-retry" type="button" hidden>重新读取依据</button>
+    <div id="evidence-data" class="evidence-grid"></div>
+  </section>
   <form id="segment-form">
-    <label>校正为 <select id="segment-state" required>
+    <label id="segment-state-label">校正为 <select id="segment-state" required>
       <option value="" disabled selected>请选择状态</option><option value="sit">坐姿</option>
       <option value="stand">站姿</option><option value="away">离开</option>
     </select></label>
@@ -222,6 +236,7 @@
 <script>
 'use strict';
 const el=id=>document.getElementById(id), names={sit:'坐姿',stand:'站姿',away:'离开',unknown:'未知',privacy:'隐私保护',present:'在位',low:'低档',high:'高档',transition:'升降中',monitoring:'历史暂停'};
+const poseMethods={keypoints:'关节几何',motion:'相对动作',cosmos:'Cosmos 复核',multiple_people:'多人在位，无法归属个人姿态',estimate_session:'推测 · 延续本次在位姿态',estimate_recent:'推测 · 延续最近姿态',estimate_pending:'推测 · 等待姿态稳定',estimate_joints:'推测 · 肩髋膝方向',estimate_default:'推测 · 仅确认有人，暂按坐姿'};
 const colors={sit:'#28634c',stand:'#bcd890',away:'#d2d9d3',unknown:'#e9ece7',privacy:'#b5afd0',present:'#84aa7b',low:'#cdd6c8',high:'#8eab87',transition:'#da9560'};
 const at=t=>new Date(t*1000).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false});
 const precise=t=>new Date(t*1000).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
@@ -288,15 +303,16 @@ function renderIntervals(){
   rows.slice(0,intervalLimit).forEach((row,index)=>{
     const li=make('li','record'), time=make('time','',precise(row.start)+' – '+precise(row.end));
     const body=make('div','',names[row.state]||row.state);
-    if(row.kind==='person' && ['sit','stand','away','unknown'].includes(row.state) && row.source!=='manual' &&
-       row.annotation_id==null && !privatePresence.some(p=>p.start<row.end && p.end>row.start)){
-      const edit=make('button','interval-edit','校正');
-      edit.type='button'; edit.dataset.segment=[day,row.start,row.end].join('/');
-      edit.setAttribute('aria-label','校正 '+time.textContent+' 的'+names[row.state]);
-      edit.setAttribute('aria-haspopup','dialog');
-      edit.onclick=()=>openSegment(day,row);
-      body.append(edit);
-      if(focused===edit.dataset.segment) restore=edit;
+    if(row.kind==='person' && ['sit','stand','away','unknown'].includes(row.state) &&
+        !privatePresence.some(p=>p.start<row.end && p.end>row.start)){
+      const editable=row.source!=='manual' && row.annotation_id==null;
+      const detail=make('button',editable?'interval-edit':'interval-view',editable?'依据 / 校正':'判断依据');
+      detail.type='button'; detail.dataset.segment=[day,row.start,row.end].join('/');
+      detail.setAttribute('aria-label','查看 '+time.textContent+' 的'+names[row.state]+'依据'+(editable?'并校正':''));
+      detail.setAttribute('aria-haspopup','dialog');
+      detail.onclick=()=>openSegment(day,row,editable);
+      body.append(detail);
+      if(focused===detail.dataset.segment) restore=detail;
     }
     if(row.source==='manual') body.append(make('span','record-note','人工确认'));
     if(row.source==='estimated') body.append(make('span','record-note','在位姿态推测'));
@@ -714,28 +730,114 @@ const segmentModal=el('segment-modal'), segmentState=el('segment-state');
 const segmentTime=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',
   hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,hourCycle:'h23'});
 let segmentSelection=null, segmentBusy=false, segmentAttempt=null, segmentHistoryKey='', segmentHistoryDay='';
+let segmentEditable=false, segmentDescription='', evidenceRead=0, evidenceStale=false, evidencePrivacyKey='';
 function segmentRange(row){
   return segmentTime.format(row.start*1000)+' 至 '+segmentTime.format(row.end*1000);
 }
+function evidenceDuration(seconds){
+  const ms=Math.round(seconds*1000);
+  if(!ms && seconds>0) return '不足 1 毫秒';
+  const h=Math.floor(ms/3600000), m=Math.floor(ms%3600000/60000), s=ms%60000/1000;
+  return [h && h+' 时',m && m+' 分',s && s+' 秒'].filter(Boolean).join(' ') || '0 秒';
+}
+function showEvidence(info){
+  const container=el('evidence-data');
+  const statuses=[];
+  if(info.privacy_seconds>0) statuses.push('隐私保护 '+evidenceDuration(info.privacy_seconds));
+  if(info.missing_seconds>0) statuses.push('姿态未采集 '+evidenceDuration(info.missing_seconds));
+  const group=(title,values,labels)=>{
+    const entries=Object.entries(values).filter(([key,seconds])=>key!=='privacy' && seconds>0);
+    if(!entries.length) return;
+    const section=make('section'), list=make('dl');
+    for(const [key,seconds] of entries){
+      const row=make('div');
+      row.append(make('dt','',labels[key]||key),make('dd','',evidenceDuration(seconds)));
+      list.append(row);
+    }
+    section.append(make('h4','',title),list);container.append(section);
+  };
+  group('原始模型记录',info.raw,{...names,unknown:'姿态未知',estimated_sit:'坐姿（推测）',estimated_stand:'站姿（推测）'});
+  group('当前统计',info.displayed,{...names,unknown:'姿态未知'});
+  if(container.children.length){
+    group('当前统计的来源',info.sources,{recorded:'直接记录',estimated:'在位姿态推测',manual:'人工确认',continuity:'连续性补齐'});
+    group('原始判断方法',{...info.methods,missing:info.method_missing_seconds},
+      {...poseMethods,unknown:'记录为方法未知',missing:'细分来源未记录'});
+  }
+  text('evidence-status',statuses.join(' · '));
+}
+function clearEvidence(message){
+  evidenceRead++;
+  el('evidence-data').replaceChildren(); el('evidence-retry').hidden=true;
+  text('evidence-status',message);
+}
+function setSegmentAccess(editable){
+  segmentEditable=editable;
+  text('segment-title',editable?'时段依据与校正':'时段判断依据');
+  el('segment-state-label').hidden=el('segment-apply').hidden=!editable;
+  text('segment-cancel',editable?'取消':'关闭');
+}
+function protectSegment(){
+  setSegmentAccess(false);
+  segmentDescription='北京时间 '+segmentRange(segmentSelection)+'。此时段含隐私保护。';
+  text('segment-details',segmentDescription);
+}
+async function loadEvidence(){
+  const selection=segmentSelection;
+  if(!segmentModal.open || !selection || evidenceStale) return;
+  clearEvidence('正在读取…');
+  const generation=evidenceRead, {date,start,end}=selection;
+  const current=()=>segmentModal.open && evidenceRead===generation && el('day').value===date && data?.date===date;
+  try{
+    const info=await request('/api/activity/evidence?date='+encodeURIComponent(date)+'&start='+start+'&end='+end);
+    if(!current()) return;
+    if(info.date!==date || info.start!==start || info.end!==end) throw Error('时段不符');
+    if(info.privacy_seconds>0) protectSegment();
+    showEvidence(info);
+  }catch(error){
+    if(current()){
+      clearEvidence('判断依据暂时无法读取。');
+      el('evidence-retry').hidden=false;
+    }
+  }
+}
 function updateSegmentForm(){
   const stale=segmentSelection?.date!==el('day').value || segmentSelection?.date!==data?.date;
-  segmentState.disabled=segmentBusy || stale;
+  if(!stale && segmentModal.open){
+    const mask=data.intervals.filter(i=>i.state==='privacy' && (i.kind==='person' || i.kind==='presence') &&
+      i.start<segmentSelection.end && i.end>segmentSelection.start).map(i=>[i.start,i.end]);
+    const key=JSON.stringify(mask);
+    if(mask.length && key!==evidencePrivacyKey){
+      protectSegment(); clearEvidence('所选时段的隐私记录已更新。'); el('evidence-retry').hidden=false;
+    }
+    evidencePrivacyKey=key;
+  }
+  segmentState.disabled=segmentBusy || stale || !segmentEditable;
   el('segment-cancel').disabled=segmentBusy;
   el('segment-apply').disabled=segmentState.disabled || !segmentState.value;
   const warning='看板日期已切换，请关闭后重新选择时间段。';
+  if(stale!==evidenceStale){
+    evidenceStale=stale;
+    clearEvidence(stale?'':'请重新读取该时段的依据。');
+    text('segment-details',stale?'':segmentDescription);
+    el('evidence-retry').hidden=stale;
+  }
   if(stale) text('segment-status',warning);
   else if(el('segment-status').textContent===warning) text('segment-status','');
 }
-function openSegment(day,row){
+function openSegment(day,row,editable){
   if(segmentBusy || day!==el('day').value) return;
   segmentSelection={date:day,start:row.start,end:row.end};
+  evidenceStale=false; evidencePrivacyKey=''; setSegmentAccess(editable);
   segmentState.value='';
   const source={estimated:'（推测）',continuity:'（含连续性推算）'}[row.source] || '';
-  text('segment-details','北京时间 '+segmentRange(row)+'。原状态为'+names[row.state]+source+'。');
+  segmentDescription='北京时间 '+segmentRange(row)+(editable?'。此行原状态为':'。当前人工确认为')+names[row.state]+source+'。';
+  text('segment-details',segmentDescription);
   text('segment-status','');
   updateSegmentForm();
   segmentModal.showModal();
+  void loadEvidence();
 }
+el('evidence-retry').onclick=()=>loadEvidence();
 function renderSegmentHistory(){
   if(segmentModal.open) updateSegmentForm();
   const groups=new Map();
@@ -767,7 +869,7 @@ function renderSegmentHistory(){
 }
 async function changeSegment(undo,button){
   const selection=undo || segmentSelection;
-  if(segmentBusy || !selection || selection.date!==el('day').value || selection.date!==data?.date || (!undo && !segmentState.value)) return;
+  if(segmentBusy || !selection || selection.date!==el('day').value || selection.date!==data?.date || (!undo && (!segmentEditable || !segmentState.value))) return;
   const range=segmentRange(selection);
   const target=undo?'segment-notice':'segment-status';
   segmentBusy=true;
@@ -780,7 +882,7 @@ async function changeSegment(undo,button){
       const fields={...selection,state:segmentState.value}, key=JSON.stringify(fields);
       if(segmentAttempt?.key!==key) segmentAttempt={key,id:crypto.randomUUID()};
       await request('/api/activity/corrections',{...fields,id:segmentAttempt.id},10000);
-      segmentModal.close(); el('segment-history').open=true;
+      closeSegment(); el('segment-history').open=true;
     }
     segmentAttempt=null;
     text('segment-notice',(undo?'已撤销校正':'已校正为'+names[segmentState.value])+' · '+range);
@@ -796,12 +898,15 @@ async function changeSegment(undo,button){
 }
 segmentState.onchange=()=>{text('segment-status','');updateSegmentForm()};
 el('segment-form').onsubmit=e=>{e.preventDefault();void changeSegment()};
-el('segment-cancel').onclick=()=>segmentModal.close();
-segmentModal.oncancel=e=>{if(segmentBusy) e.preventDefault()};
+function closeSegment(){
+  clearEvidence(''); text('segment-details',''); segmentModal.close();
+}
+el('segment-cancel').onclick=closeSegment;
+segmentModal.oncancel=e=>{e.preventDefault();if(!segmentBusy) closeSegment()};
 segmentModal.onclose=()=>{
   if(segmentModal.open) return;
   if(document.activeElement===document.body) el('records-heading').focus({preventScroll:true});
-  segmentSelection=null;
+  segmentSelection=null; segmentDescription=''; clearEvidence(''); text('segment-details','');
 };
 const absenceModal=el('absence-modal'), absenceStart=el('absence-start'), absenceEnd=el('absence-end');
 let absenceDay='', absenceRead=0, absenceSaving=false, absenceAttempt=null;
@@ -1015,7 +1120,7 @@ document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{document.querySele
 
 const bones=[[0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
 function clearLive(message){liveEpoch++;const canvas=el('live-canvas');canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);canvas.hidden=true;el('live-placeholder').hidden=false;text('live-message',message);text('live-posture',liveActive?'预览暂停':'等待开启');el('live-details').replaceChildren()}
-async function loadLive(){if(!liveActive||liveBusy||document.hidden)return;liveBusy=true;const generation=liveEpoch;try{const r=await request('/api/live/frame');if(generation!==liveEpoch||!liveActive)return;const c=r.camera;if(c.vision_paused||c.privacy_active){clearLive('隐私保护中，实时画面已清除');return}const img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src='data:image/jpeg;base64,'+r.image});if(generation!==liveEpoch||!liveActive||document.hidden)return;const canvas=el('live-canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);const points=c.overlay?.keypoints||[];const valid=p=>p&&p.confidence>=.55&&p.x>=0&&p.y>=0&&p.x<canvas.width&&p.y<canvas.height;ctx.lineWidth=3;ctx.strokeStyle='#9df7bd';(c.overlay?.detections||[]).forEach(d=>{ctx.setLineDash([8,6]);const [x1,y1,x2,y2]=d.box;ctx.strokeRect(x1,y1,x2-x1,y2-y1);ctx.font='15px system-ui';ctx.fillStyle='#9df7bd';ctx.fillText('人体 '+Math.round(d.confidence*100)+'%',x1,Math.max(20,y1-7))});ctx.setLineDash([]);ctx.lineWidth=4;bones.forEach(([a,b])=>{if(valid(points[a])&&valid(points[b])){ctx.beginPath();ctx.moveTo(points[a].x,points[a].y);ctx.lineTo(points[b].x,points[b].y);ctx.stroke()}});points.forEach(p=>{if(valid(p)){ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fillStyle='#f5cf83';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle='#1e3b2c';ctx.stroke();ctx.strokeStyle='#9df7bd'}});const source={keypoints:'关节几何',motion:'相对动作',cosmos:'Cosmos 复核',multiple_people:'多人在位，无法归属个人姿态',estimate_session:'推测 · 延续本次在位姿态',estimate_recent:'推测 · 延续最近姿态',estimate_pending:'推测 · 等待姿态稳定',estimate_joints:'推测 · 肩髋膝方向',estimate_default:'推测 · 仅确认有人，暂按坐姿'}[c.pose_source]||'暂无可靠姿态';ctx.fillStyle='rgba(20,40,32,.78)';ctx.fillRect(15,15,Math.min(640,canvas.width-30),75);ctx.fillStyle='#fff';ctx.font='22px system-ui';ctx.fillText(`姿态：${(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':'')}  ·  工位：${names[c.presence]||'未知'}`,30,46);ctx.font='15px system-ui';ctx.fillStyle='#c6d9c7';ctx.fillText(`${source}  /  ${precise(c.captured_at)}  /  有效关节 ${points.filter(valid).length}/17`,30,73);canvas.hidden=false;el('live-placeholder').hidden=true;text('live-posture',c.pose_source==='multiple_people'?'多人在位 · 个人姿态未确认':(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':''));kv(el('live-details'),[['工位',names[c.presence]||'未知'],['骨骼模型',c.vision_model?.name||c.overlay?.model||'—'],['模型耗时',Number.isFinite(c.vision_ms)?c.vision_ms.toFixed(1)+' ms':'—'],['判断来源',source],['可见关节',points.filter(valid).length+' / 17'],['检测帧率',(c.fps||0)+' FPS'],['画面时间',precise(c.captured_at)]]);img.src=''}catch(error){if(generation===liveEpoch)clearLive(error.message||'画面暂不可用')}finally{liveBusy=false}}
+async function loadLive(){if(!liveActive||liveBusy||document.hidden)return;liveBusy=true;const generation=liveEpoch;try{const r=await request('/api/live/frame');if(generation!==liveEpoch||!liveActive)return;const c=r.camera;if(c.vision_paused||c.privacy_active){clearLive('隐私保护中，实时画面已清除');return}const img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src='data:image/jpeg;base64,'+r.image});if(generation!==liveEpoch||!liveActive||document.hidden)return;const canvas=el('live-canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);const points=c.overlay?.keypoints||[];const valid=p=>p&&p.confidence>=.55&&p.x>=0&&p.y>=0&&p.x<canvas.width&&p.y<canvas.height;ctx.lineWidth=3;ctx.strokeStyle='#9df7bd';(c.overlay?.detections||[]).forEach(d=>{ctx.setLineDash([8,6]);const [x1,y1,x2,y2]=d.box;ctx.strokeRect(x1,y1,x2-x1,y2-y1);ctx.font='15px system-ui';ctx.fillStyle='#9df7bd';ctx.fillText('人体 '+Math.round(d.confidence*100)+'%',x1,Math.max(20,y1-7))});ctx.setLineDash([]);ctx.lineWidth=4;bones.forEach(([a,b])=>{if(valid(points[a])&&valid(points[b])){ctx.beginPath();ctx.moveTo(points[a].x,points[a].y);ctx.lineTo(points[b].x,points[b].y);ctx.stroke()}});points.forEach(p=>{if(valid(p)){ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fillStyle='#f5cf83';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle='#1e3b2c';ctx.stroke();ctx.strokeStyle='#9df7bd'}});const source=poseMethods[c.pose_source]||'暂无可靠姿态';ctx.fillStyle='rgba(20,40,32,.78)';ctx.fillRect(15,15,Math.min(640,canvas.width-30),75);ctx.fillStyle='#fff';ctx.font='22px system-ui';ctx.fillText(`姿态：${(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':'')}  ·  工位：${names[c.presence]||'未知'}`,30,46);ctx.font='15px system-ui';ctx.fillStyle='#c6d9c7';ctx.fillText(`${source}  /  ${precise(c.captured_at)}  /  有效关节 ${points.filter(valid).length}/17`,30,73);canvas.hidden=false;el('live-placeholder').hidden=true;text('live-posture',c.pose_source==='multiple_people'?'多人在位 · 个人姿态未确认':(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':''));kv(el('live-details'),[['工位',names[c.presence]||'未知'],['骨骼模型',c.vision_model?.name||c.overlay?.model||'—'],['模型耗时',Number.isFinite(c.vision_ms)?c.vision_ms.toFixed(1)+' ms':'—'],['判断来源',source],['可见关节',points.filter(valid).length+' / 17'],['检测帧率',(c.fps||0)+' FPS'],['画面时间',precise(c.captured_at)]]);img.src=''}catch(error){if(generation===liveEpoch)clearLive(error.message||'画面暂不可用')}finally{liveBusy=false}}
 el('live-toggle').onclick=()=>{liveActive=!liveActive;el('live-toggle').textContent=liveActive?'关闭实时画面':'开启实时画面';if(liveActive){clearLive('正在连接本机摄像头…');loadLive()}else clearLive('实时画面已关闭')};setInterval(loadLive,1000);document.addEventListener('visibilitychange',()=>{if(document.hidden){clearLive('页面已隐藏，预览暂停');el('frame').hidden=true;el('frame').removeAttribute('src');corner=null;}else if(liveActive)loadLive()});
 
 el('dismiss-reminder').onclick=()=>{localStorage.setItem('deskside-reminder-ack',Math.max(0,...(data.active_reminders||[]).map(r=>r.id)));el('reminder-banner').hidden=true};

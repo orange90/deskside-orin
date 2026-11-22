@@ -93,8 +93,9 @@ class CameraPipelineTests(unittest.TestCase):
         model.overlay = {"keypoints": [], "detections": []}
         def sample(*args):
             _, n, pose=steps[i]
+            source = "motion" if i % 2 else "keypoints"
             return ("unknown",pose,None,n,n,"unknown",None,
-                    "keypoints" if pose in ("sit","stand") else None)
+                    source if pose in ("sit","stand") else None)
         model.sample.side_effect = sample
         def persist(states, wall, continuous):
             writes.append((i,states,continuous))
@@ -133,6 +134,13 @@ class CameraPipelineTests(unittest.TestCase):
         for ix, sample, _ in writes:
             self.assertEqual(sample['person'] in ('sit','stand','estimated_sit','estimated_stand'),
                              sample['presence']=='present' and steps[ix][1] <= 1)
+            frame = frames[ix]
+            expected = None if frame['vision_paused'] else frame['pose_source']
+            self.assertEqual(sample['pose_method'], expected or 'unknown')
+        # Once sitting is stable, changing between two observed methods on every
+        # frame still writes only on the ordinary one-second heartbeat.
+        self.assertEqual({r['pose_source'] for r in frames[14:20]}, {'motion', 'keypoints'})
+        self.assertLessEqual(sum(14 <= ix < 20 for ix in written_frames), 2)
 
     def test_pose_change_invalidates_only_replies_from_older_frames(self):
         r = main.PostureReview()
