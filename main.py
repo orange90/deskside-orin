@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, StrictBool, field_validator
 import store
 import focus_sessions
 import field_trials
+import privacy_pause
 import reminder_queue
 import interval_corrections
 import activity_evidence
@@ -37,7 +38,14 @@ CAL = ROOT / "calibration.json"
 voice = Voice()
 stop = threading.Event()
 events = queue.Queue(maxsize=1)
-lock = threading.Lock()
+lock = threading.RLock()
+capture_released = threading.Condition(lock)
+privacy_control = threading.Lock()
+# The capture generation changes on both edges, including a quick pause/resume
+# that the thread never saw between reads. Only the capture thread releases V4L2.
+capture_generation = 0
+device_generation = None
+manual_pause = None
 latest = {"ready": False}
 preview = None
 vision_epoch = 0
@@ -55,15 +63,50 @@ def invalidate_scene_locked():
         pending.cancel()
 
 
-def publish(frame, **values):
+def publish(frame, *, generation=None, **values):
     global latest, preview, last_publication
     with lock:
+        if manual_pause is not None or generation is not None and generation != capture_generation:
+            return
         if latest.get("ready") and not latest.get("vision_paused") and (
                 not values.get("ready") or values.get("vision_paused")):
             invalidate_scene_locked()
         last_publication = time.monotonic()
         latest = values
         preview = frame
+
+
+def sync_privacy(action=privacy_pause.snapshot, *args, confirm=False, startup=False):
+    global manual_pause, capture_generation, latest, preview
+    # Serialize durable changes with installation of their in-memory gate.
+    # Never hold the publication lock across camera reads or model calls.
+    with privacy_control:
+        with capture_released:
+            status = action(*args)
+            active = status['active']
+            if startup or manual_pause != active:
+                previous = manual_pause
+                capture_generation += 1
+                invalidate_scene_locked()
+                manual_pause = active
+                preview = None
+                latest = {"ready": False}
+                capture_released.notify_all()
+                capture_clock.boundary(previous, active, status['server_now'], startup)
+            if confirm and active and not capture_released.wait_for(lambda: device_generation is None, timeout=2):
+                raise HTTPException(503, "已屏蔽摄像头画面，正在等待设备释放。请重试确认。")
+        return status
+
+
+def queue_scene(frames, reply, mode, deadline, generation):
+    with lock:
+        if manual_pause is not None or generation is not None and generation != capture_generation:
+            return False
+        try:
+            events.put_nowait((frames, reply, vision_epoch, mode, deadline))
+        except queue.Full:
+            return False
+        return True
 
 
 class PostureReview:
@@ -97,7 +140,7 @@ class PostureReview:
             self.pending = None
             self.requested = 0.
 
-    def update(self, frame, now, *, empty_candidate, interval):
+    def update(self, frame, now, *, empty_candidate, interval, generation=None):
         if self.empty_candidate is not None and self.empty_candidate != empty_candidate:
             self.clear()
         self.empty_candidate = empty_candidate
@@ -120,13 +163,8 @@ class PostureReview:
                 self.label = None
         if self.pending is None and now - self.requested >= interval:
             reply = Future()
-            try:
-                deadline = now + (max(4, interval + 2) if empty_candidate else 7)
-                events.put_nowait(([frame()], reply, vision_epoch,
-                                   "occupancy" if empty_candidate else "person", deadline))
-            except queue.Full:
-                pass
-            else:
+            deadline = now + (max(4, interval + 2) if empty_candidate else 7)
+            if queue_scene([frame()], reply, "occupancy" if empty_candidate else "person", deadline, generation):
                 self.pending, self.requested = reply, now
         return self.label if now < self.valid_until else None
 
@@ -156,11 +194,82 @@ def camera():
             os.kill(os.getpid(), signal.SIGTERM)
 
 
+PRIVATE_STATES = {"person": "privacy", "presence": "privacy", "desk": "unknown", "pose_method": "unknown"}
+
+
+class CaptureClock:
+    def __init__(self):
+        self.last = 0.
+        self.wall = self.generation = None
+
+    def write(self, generation, states, wall, monotonic, continuous):
+        with lock:
+            if generation == capture_generation:
+                store.persist_sample(states, wall, continuous)
+                self.last = monotonic
+                self.wall, self.generation = wall, generation
+
+    def boundary(self, previous, active, wall, startup):
+        """Called under the publication lock after invalidating the old generation."""
+        now = time.monotonic()
+        recent = (not startup and self.generation == capture_generation - 1 and
+                  0 <= now - self.last < 3 and 0 <= wall - self.wall <= 3)
+        if previous and recent:
+            end = min(wall, previous['until'])
+            if end > self.wall:
+                store.persist_sample(PRIVATE_STATES, end, True)
+        self.last = 0.
+        self.wall = self.generation = None
+        if active:
+            # On restart observe only from here, even if the lease started hours ago.
+            self.write(capture_generation, PRIVATE_STATES, wall, now, recent)
+
+
+capture_clock = CaptureClock()
+
+
 def capture_frames():
+    global device_generation, last_publication
     import cv2
-    from vision import Vision, crop
+    from vision import Vision
 
     cv2.setNumThreads(1)
+    vision = None
+    while not stop.is_set():
+        with lock:
+            generation, active = capture_generation, manual_pause
+        if active:
+            wall, now = time.time(), time.monotonic()
+            if wall >= active['until']:
+                sync_privacy()
+                continue
+            if capture_clock.generation != generation or not 0 <= now - capture_clock.last < 1:
+                continuous = capture_clock.generation == generation and 0 <= now - capture_clock.last < 3
+                capture_clock.write(generation, PRIVATE_STATES, wall, now, continuous)
+            last_publication = now
+            stop.wait(min(.5, active['until'] - wall))
+            continue
+        if vision is None:
+            vision = Vision()
+        with capture_released:
+            if generation != capture_generation:
+                continue
+            device_generation = generation
+        try:
+            _capture_session(cv2, vision, generation)
+        finally:
+            # A fresh session must start with a new scene, subject and pose history.
+            # The loaded model is reusable; Vision.sample resets its tracker when boxes is None.
+            vision.boxes = vision.background = vision.last_subject_box = vision.last_subject_time = None
+            vision.overlay = {}
+            if hasattr(vision, "rise"):
+                vision.rise.clear()
+            with capture_released:
+                device_generation = None
+                capture_released.notify_all()
+
+
+def _capture_session(cv2, vision, generation):
     posture, desk, facing = StableState(), StableState(), StableState()
     session = SittingSession()
     continuity = PresenceContinuity()
@@ -170,7 +279,7 @@ def capture_frames():
     cap = None
     last_sample = None
     frame_count = 0
-    last_db = 0.0
+    last_db = 0.
     last_recorded = None
     previous = "unknown"
     scene_config = None
@@ -181,8 +290,7 @@ def capture_frames():
     last_subject_roi = None
     review = PostureReview()
     try:
-        vision = Vision()
-        while not stop.is_set():
+        while not stop.is_set() and generation == capture_generation:
             start = time.monotonic()
             if cap is None:
                 cap = cv2.VideoCapture(int(os.environ.get("ORIN_CAMERA", "0")), cv2.CAP_V4L2)
@@ -190,7 +298,11 @@ def capture_frames():
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if generation != capture_generation:
+                    return
             ok, frame = cap.read()
+            if generation != capture_generation:
+                return
             ok = bool(ok and frame is not None and frame.size)
             now = time.monotonic()
             captured_at = time.time()
@@ -226,6 +338,8 @@ def capture_frames():
                     reviewed = None
                 else:
                     d, p, edge_y, count, strong, orientation, region_hint, pose_source = vision.sample(frame, config)
+                    if generation != capture_generation:
+                        return
                     multi = count > 1
                     if multi != multiple or vision.overlay.get("subject_changed"):
                         # The current skeleton and a previous in-flight reply
@@ -250,7 +364,7 @@ def capture_frames():
                         empty_candidate = count == 0
                         interval = (6 if previous == "away" else 3) if empty_candidate else 1.5
                         reviewed = review.update(lambda: desk_image(frame, roi, posture_detail=not empty_candidate), now,
-                                                 empty_candidate=empty_candidate, interval=interval)
+                                                 empty_candidate=empty_candidate, interval=interval, generation=generation)
                         if reviewed in {"sit", "stand", "present"}:
                             p = "unknown" if reviewed == "present" else reviewed
                             at_desk, pose_source = "present", "cosmos"
@@ -280,7 +394,7 @@ def capture_frames():
                     _, data = cv2.imencode(".jpg", frame)
                     preview_data = data.tobytes()
                 frame_count += 1
-                publish(preview_data, ready=True, person=ps, desk=ds, desk_edge=edge_y,
+                publish(preview_data, generation=generation, ready=True, person=ps, desk=ds, desk_edge=edge_y,
                         pose_source=pose_source, people=count, presence=present,
                         vision_model=vision.model_info, vision_ms=vision.model.last_ms if not paused else None,
                         presence_source=presence_source, occluded=reviewed == "occluded",
@@ -293,20 +407,20 @@ def capture_frames():
                 elapsed = now - last_sample if last_sample is not None else 0.
                 reminder_pose = "unknown" if (pose_source or "").startswith("estimate_") else ps
                 if session.update(reminder_pose, elapsed, sit_limit):
-                    store.note("reminder", "已经坐了一段时间，可以起身活动一下。")
+                    with lock:
+                        if generation == capture_generation:
+                            store.note("reminder", "已经坐了一段时间，可以起身活动一下。")
                 if region_hint:
                     last_subject_roi = region_hint
                 roi = config.get("cosmos_roi") or last_subject_roi
                 if not paused and not multiple and roi and (not history or now - history[-1][0] >= .75):
                     history.append((now, desk_image(frame, roi)))
                 if ps != previous and previous in {"sit", "stand", "away"} and ps in {"sit", "stand", "away"} and history:
-                    try:
-                        events.put_nowait(([data for _, data in history], None, vision_epoch, None, now + 8))
-                    except queue.Full:
-                        pass
+                    queue_scene([data for _, data in history], None, None, now + 8, generation)
                 previous, last_sample = ps, now
             else:
-                publish(None, ready=False, vision_paused=True, privacy_active=privacy, error="摄像头不可用")
+                publish(None, generation=generation, ready=False, vision_paused=True, privacy_active=privacy,
+                        error="摄像头不可用")
                 cap.release()
                 cap = None
                 vision.boxes = None
@@ -333,12 +447,13 @@ def capture_frames():
                 method = "unknown"
                 if ok and not paused and not privacy and pose_source in POSE_METHODS:
                     method = pose_source
-                store.persist_sample({**states, "pose_method": method}, captured_at, continuous)
+                capture_clock.write(generation, {**states, "pose_method": method}, captured_at, now, continuous)
                 last_recorded = states
                 observation_broken = False
                 last_db = now
             if not ok:
-                stop.wait(2)
+                with capture_released:
+                    capture_released.wait_for(lambda: generation != capture_generation or stop.is_set(), timeout=2)
             stop.wait(max(0, .16 - (time.monotonic() - start)))
     finally:
         if cap is not None:
@@ -347,6 +462,7 @@ def capture_frames():
 
 def cosmos():
     while not stop.is_set():
+        frames = images = None
         try:
             frames, reply, epoch, review_mode, deadline = events.get(timeout=.5)
         except queue.Empty:
@@ -354,7 +470,7 @@ def cosmos():
         while epoch == vision_epoch and time.monotonic() < deadline and (voice.busy.is_set() or voice.recording):
             if stop.wait(.15):
                 return
-        if epoch != vision_epoch or time.monotonic() >= deadline:
+        if manual_pause is not None or epoch != vision_epoch or time.monotonic() >= deadline:
             if reply is not None:
                 reply.cancel()
             continue
@@ -366,6 +482,11 @@ def cosmos():
                    "data:image/jpeg;base64," + base64.b64encode(frame).decode()}}
                   for frame in frames[-count:]]
         try:
+            with lock:
+                if manual_pause is not None or epoch != vision_epoch or time.monotonic() >= deadline:
+                    if reply is not None:
+                        reply.set_result(None)
+                    continue
             label, summary = describe_desk_frames(images, posture_review=reply is not None, review_mode=review_mode)
             with lock:
                 if reply is not None:
@@ -415,6 +536,7 @@ async def lifespan(app):
     global last_publication
     last_publication = None
     store.initialize()
+    sync_privacy(startup=True)
     stop.clear()
     workers = [threading.Thread(target=f, daemon=True) for f in (camera, cosmos, reminder_loop, capture_watchdog)]
     workers.append(threading.Thread(target=monitor.run, args=(stop,), daemon=True))
@@ -520,6 +642,11 @@ class FocusStart(BaseModel):
     task_id: str | None = None
 
 
+class PrivacyStart(BaseModel):
+    id: uuid.UUID
+    minutes: int = Field(strict=True)
+
+
 class TrialLabel(BaseModel):
     id: uuid.UUID
     state: str
@@ -580,13 +707,42 @@ def trial_report(session_id: uuid.UUID):
 
 def camera_view():
     """Published frames are immutable. A stalled capture must not look live."""
-    sample = latest
+    with lock:
+        sample, active = latest, manual_pause
+    manual = {"manual_privacy": active is not None, "manual_until": active['until'] if active else None,
+              "manual_id": active['id'] if active else None}
+    if active:
+        return {**manual, "ready": False, "vision_paused": True, "privacy_active": True,
+                "person": "privacy", "presence": "privacy"}
     if sample.get("ready") and time.monotonic() - sample.get("frame_clock", 0) > 3:
-        return {"ready": False, "stale": True, "vision_paused": True,
+        return {**manual, "ready": False, "stale": True, "vision_paused": True,
                 "person": "unknown", "presence": "unknown", "people": None,
                 "privacy_active": bool(sample.get("privacy_active")),
                 "error": "摄像头没有新画面"}
-    return sample
+    return {**sample, **manual}
+
+
+@app.get("/api/camera/privacy")
+def camera_privacy():
+    return sync_privacy()
+
+
+@app.post("/api/camera/privacy")
+def pause_camera(item: PrivacyStart):
+    try:
+        return sync_privacy(privacy_pause.start, item.id, item.minutes, confirm=True)
+    except privacy_pause.PrivacyConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/camera/privacy/{session_id}/resume")
+def resume_camera(session_id: uuid.UUID):
+    try:
+        return sync_privacy(privacy_pause.resume, session_id)
+    except KeyError:
+        raise HTTPException(404, "找不到该次隐私暂停") from None
 
 
 @app.get("/api/state")
@@ -801,8 +957,8 @@ def live_frame():
             raise HTTPException(423, "隐私保护或画面不可用，实时预览已暂停")
         image, state = preview, dict(sample)
         epoch = vision_epoch
-    return Response(json.dumps({"image": base64.b64encode(image).decode(), "camera": state, "epoch": epoch}),
-                    media_type="application/json", headers={"Cache-Control": "no-store"})
+        return Response(json.dumps({"image": base64.b64encode(image).decode(), "camera": state, "epoch": epoch}),
+                        media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/calibration/frame")

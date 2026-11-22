@@ -60,6 +60,11 @@ def initialize():
                 CHECK((state='active' AND ended_at IS NULL) OR
                       (state!='active' AND ended_at IS NOT NULL AND ended_at BETWEEN started_at AND due_at)));
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_focus ON focus_sessions(state) WHERE state='active';
+            CREATE TABLE IF NOT EXISTS camera_pauses (
+                id TEXT PRIMARY KEY, minutes INTEGER NOT NULL CHECK(minutes IN (1,15,30,60)),
+                started_at REAL NOT NULL, until REAL NOT NULL CHECK(until>started_at),
+                ended_at REAL CHECK(ended_at BETWEEN started_at AND until));
+            CREATE UNIQUE INDEX IF NOT EXISTS one_camera_pause ON camera_pauses((1)) WHERE ended_at IS NULL;
             CREATE TABLE IF NOT EXISTS field_trials (
                 id TEXT PRIMARY KEY, started_at REAL NOT NULL, deadline REAL NOT NULL CHECK(deadline>started_at),
                 ended_at REAL CHECK(ended_at BETWEEN started_at AND deadline),
@@ -109,6 +114,10 @@ def _record_intervals(states, now, continuous, max_gap):
         # negative ranges. Resume when this clock reaches the last observation.
         if any(row and now < row["end"] for row in latest.values()):
             return
+        # A manual pause is sampled by the running worker. An interruption on
+        # either edge is genuinely unsampled, including when a lease spans a restart.
+        presence = latest.get("presence")
+        manual_edge = states.get("presence") == "privacy" or presence is not None and presence["state"] == "privacy"
         for kind, state in states.items():
             row = latest[kind]
             start = now
@@ -119,12 +128,12 @@ def _record_intervals(states, now, continuous, max_gap):
                     db.execute("UPDATE intervals SET state=? WHERE kind=? AND start=?",
                                (state, kind, now))
                     continue
-                if adjacent or row["state"] == "unknown":
+                if adjacent or row["state"] == "unknown" and not manual_edge:
                     db.execute("UPDATE intervals SET end=? WHERE kind=? AND start=?",
                                (now, kind, row["start"]))
                     if row["state"] == state:
                         continue
-                elif previous_end < now:
+                elif previous_end < now and not manual_edge:
                     # A solitary sample occupies no duration. Turn its marker
                     # into the missing-data range instead of fabricating time.
                     if previous_end == row["start"]:

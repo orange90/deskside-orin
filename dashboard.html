@@ -119,6 +119,10 @@
 .idea-compose-actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px}
 #idea-view{font-size:12px;padding:5px 9px}
 .note-record .body{min-width:0;overflow-wrap:anywhere}.note-record>div{min-width:0}
+.privacy-control{grid-column:1/-1;border-top:1px solid var(--line);padding-top:12px}
+.privacy-controls{display:flex;align-items:center;flex-wrap:wrap;gap:7px;font-size:13px}
+.privacy-control p{font-size:12px;margin:5px 0}.privacy-controls select,.privacy-controls button{font-size:13px;padding:6px 9px}
+#privacy-feedback:empty{display:none}
 </style>
 </head>
 <body>
@@ -172,7 +176,12 @@
   <p id="focus-last" class="muted"></p><p id="focus-message" role="status"></p>
   <p id="focus-sync" class="muted"><span id="focus-sync-text">正在连接 Orin…</span> <button type="button" id="focus-retry" hidden>重新同步</button></p>
 </section>
-<section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><div class="live-actions"><a href="/field-trial">现场核验坐站识别</a><button id="live-toggle">开启实时画面</button></div></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div></div></section>
+<section id="live" class="section-block"><div class="section-title"><div><h2>实时画面与姿态估计</h2><p>实际 YOLO26m-Pose 关键点 · 仅绘制置信度 ≥ 0.55 的关节 · 预览每秒 1 帧</p></div><div class="live-actions"><a href="/field-trial">现场核验坐站识别</a><button id="live-toggle">开启实时画面</button></div></div><div class="card live-grid"><div class="live-screen"><canvas id="live-canvas" width="1280" height="720" hidden aria-label="摄像头实时画面及人体骨骼估计"></canvas><div id="live-placeholder" class="live-placeholder"><span style="font-size:30px;color:#9bb392">◎</span><p id="live-message">实时画面默认关闭</p><small>开启后只在当前页面显示，不保存连续视频。</small></div></div><div class="live-readout"><span class="eyebrow">POSE ESTIMATION</span><h3 id="live-posture" style="font-size:24px;margin:12px 0">等待开启</h3><div id="live-details"></div><p class="hardware-sub" style="margin-top:18px">骨骼来自关键点模型。画面被遮挡时，部分关节可能不可见；坐站标签还会参考动作与本机视觉复核。图中不会补画缺失关节。</p></div><section class="privacy-control" aria-labelledby="privacy-heading"><h3 id="privacy-heading">摄像头隐私暂停</h3>
+<p id="privacy-state" role="status">正在核对摄像头状态…</p>
+<div class="privacy-controls"><label id="privacy-duration">暂停时长 <select id="privacy-minutes"><option value="1">1 分钟</option><option value="15" selected>15 分钟</option><option value="30">30 分钟</option><option value="60">60 分钟</option></select></label>
+<button type="button" id="privacy-change" disabled>暂停摄像头</button></div>
+<p class="muted">暂停期间仍可按需使用语音。恢复后继续自动暗场保护。</p>
+<p id="privacy-feedback" role="status"></p></section></div></section>
 <section id="hardware" class="section-block"><div class="section-title"><div><h2>设备的实时脉搏</h2><p>独立实时数据 · 最近 15 分钟趋势 · 每 15 秒采样</p></div><span class="muted" id="hardware-updated">等待采样</span></div><div class="hardware-grid">
 <article class="card hardware-metric"><div class="metric-label">GPU 使用率 <span>GPU</span></div><div class="value" id="gpu-value">—</div><svg id="gpu-spark" class="spark" viewBox="0 0 240 42" aria-label="GPU 使用率趋势"></svg><p class="hardware-sub" id="gpu-sub">等待遥测</p></article>
 <article class="card hardware-metric"><div class="metric-label">统一内存 <span>RAM</span></div><div class="value" id="ram-value">—</div><svg id="ram-spark" class="spark" viewBox="0 0 240 42" aria-label="内存使用趋势"></svg><p class="hardware-sub" id="ram-sub">CPU 与 GPU 共享内存</p></article>
@@ -267,6 +276,14 @@ const duration=s=>{s=Math.max(0,Math.round(s||0));return s>=3600?`${Math.floor(s
 const durationHTML=s=>{s=Math.max(0,Math.round(s||0));return s>=3600?`${Math.floor(s/3600)}<small>时</small>${Math.floor(s%3600/60)}<small>分</small>`:s>0&&s<60?`${s}<small>秒</small>`:`${Math.floor(s/60)}<small>分</small>`};
 let followToday=true, pendingRefresh=false, activityRevision=0;
 let liveActive=false,liveBusy=false,liveEpoch=0;
+let cameraSample=null, privacySession=null, privacyKnown=false, privacyBusy=false;
+let privacyVersion=0, privacyRead=0, privacyTimer, calibrationRead=0, calibrationURL=null;
+let privacyAttempt=null;
+const privacyStorage='deskside.camera-privacy.pending';
+try{
+  const saved=JSON.parse(sessionStorage.getItem(privacyStorage));
+  if(saved && typeof saved.id==='string' && (saved.resume===true || [1,15,30,60].includes(saved.minutes))) privacyAttempt=saved;
+}catch{}
 let data=null, hardware=null, catalog=null, selectedKind='person',selectedNote='cosmos',intervalLimit=20,noteLimit=12,recording=false,corner=null,loading=false,modelComponent=null,toastTimer;
 async function request(path,body,timeout){
   const options={cache:'no-store'};
@@ -391,7 +408,7 @@ function estimatedSeconds(rows, state) {
   return rows.filter(r => r.kind==='person' && r.state===state).reduce((sum,r) =>
     sum+(r.source==='estimated' ? r.end-r.start : r.inferred_seconds||0), 0);
 }
-function renderActivity(){const t=data.totals,c=data.camera||{};const unack=(data.active_reminders||[]).filter(r=>r.id>Number(localStorage.getItem('deskside-reminder-ack')||0));el('reminder-banner').hidden=!unack.length;if(unack.length)text('reminder-message',`提醒 · ${unack[0].body}${unack.length>1?'（共 '+unack.length+' 条未读，详见提醒记录）':''}`);el('day').value=data.date;el('day').max=data.today;el('day').min=data.first_date;el('previous').disabled=data.date<=data.first_date;el('next').disabled=data.date>=data.today;text('day-label',`${new Date(data.start*1000).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',weekday:'long'})} · ${data.date===data.today?'今天仍在继续':'回看这一天的桌前节奏'}`);['present','sit','stand','away'].forEach(s=>el(s+'-value').innerHTML=durationHTML(t[s]||0));const person=postureRuns(data.intervals),sit=person.filter(i=>i.state==='sit');text('sit-detail',`含推测 ${duration(estimatedSeconds(data.intervals,"sit"))} · 最长一段 ${duration(sit.reduce((m,i)=>Math.max(m,i.end-i.start),0))}`);text('stand-detail',`含推测 ${duration(estimatedSeconds(data.intervals,'stand'))} · ${person.filter(i=>i.state==='stand').length} 个站姿段`);text('away-detail',`${person.filter(i=>i.state==='away').length} 个离开记录段`);const target=data.settings.stand_minutes,percent=Math.floor((t.stand||0)/(target*60)*100);text('goal-percent',percent+'%');text('goal-minutes',`${Math.floor((t.stand||0)/60)} / ${target} 分钟`);el('goal-arc').setAttribute('stroke-dasharray',`${Math.min(100,percent)/100*314.159} 314.159`);text('goal-message',percent>=100?'这一天的站立目标已完成':`距离目标还差 ${Math.ceil(Math.max(0,target*60-(t.stand||0))/60)} 分钟`);text('privacy-total',`隐私 ${duration(t.privacy)} · 未知 ${duration(t.unknown)}`);const state=c.privacy_active?'隐私保护中':!c.ready?(c.stale?'摄像头没有新画面':'摄像头未就绪'):c.vision_paused?'画面过暗，检测暂停':c.pose_source==='multiple_people'?'多人在位 · 个人姿态未确认':`当前${(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':'')}`;text('current',state);text('current-detail',`今天实时 · ${c.ready&&!c.vision_paused?`${c.fps||0} FPS · ${c.presence_source==='short_occlusion'?'遮挡，短时延续在位':c.occluded?'遮挡，状态待确认':names[c.presence]||'未知'}`:'等待可用画面'}`);text('vision-flow-status',c.vision_paused?'隐私 / 暗场暂停':c.ready?'视觉采集运行中':'等待摄像头');el('show').disabled=!c.ready||c.vision_paused;if(el('show').disabled){clearLive(c.privacy_active?'隐私保护中，实时画面已清除':'画面不可用，预览已暂停');el('frame').hidden=true;el('frame').removeAttribute('src');corner=null}if(document.activeElement!==el('stand'))el('stand').value=data.settings.stand_minutes;if(document.activeElement!==el('sit'))el('sit').value=data.settings.sit_minutes;text('coverage',`姿态有效记录 ${duration((t.sit||0)+(t.stand||0)+(t.away||0))}${data.annotations?.length?' · 含 '+data.annotations.length+' 段人工标注':''}${data.continuity?.inferred_seconds?' · 连续性补齐 '+duration(data.continuity.inferred_seconds):''}`);drawTimeline();drawHours();renderIntervals();renderNotes();el('reminder-notes').replaceChildren(...data.notes.filter(n=>n.kind==='reminder').slice(0,3).map(n=>make('li','',`${at(n.start)} · ${n.body}`)));text('updated',`上次同步 ${precise(data.as_of)} · 每 15 秒静默更新`)}
+function renderActivity(){const t=data.totals;const unack=(data.active_reminders||[]).filter(r=>r.id>Number(localStorage.getItem('deskside-reminder-ack')||0));el('reminder-banner').hidden=!unack.length;if(unack.length)text('reminder-message',`提醒 · ${unack[0].body}${unack.length>1?'（共 '+unack.length+' 条未读，详见提醒记录）':''}`);el('day').value=data.date;el('day').max=data.today;el('day').min=data.first_date;el('previous').disabled=data.date<=data.first_date;el('next').disabled=data.date>=data.today;text('day-label',`${new Date(data.start*1000).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',weekday:'long'})} · ${data.date===data.today?'今天仍在继续':'回看这一天的桌前节奏'}`);['present','sit','stand','away'].forEach(s=>el(s+'-value').innerHTML=durationHTML(t[s]||0));const person=postureRuns(data.intervals),sit=person.filter(i=>i.state==='sit');text('sit-detail',`含推测 ${duration(estimatedSeconds(data.intervals,"sit"))} · 最长一段 ${duration(sit.reduce((m,i)=>Math.max(m,i.end-i.start),0))}`);text('stand-detail',`含推测 ${duration(estimatedSeconds(data.intervals,'stand'))} · ${person.filter(i=>i.state==='stand').length} 个站姿段`);text('away-detail',`${person.filter(i=>i.state==='away').length} 个离开记录段`);const target=data.settings.stand_minutes,percent=Math.floor((t.stand||0)/(target*60)*100);text('goal-percent',percent+'%');text('goal-minutes',`${Math.floor((t.stand||0)/60)} / ${target} 分钟`);el('goal-arc').setAttribute('stroke-dasharray',`${Math.min(100,percent)/100*314.159} 314.159`);text('goal-message',percent>=100?'这一天的站立目标已完成':`距离目标还差 ${Math.ceil(Math.max(0,target*60-(t.stand||0))/60)} 分钟`);text('privacy-total',`隐私 ${duration(t.privacy)} · 未知 ${duration(t.unknown)}`);if(document.activeElement!==el('stand'))el('stand').value=data.settings.stand_minutes;if(document.activeElement!==el('sit'))el('sit').value=data.settings.sit_minutes;text('coverage',`姿态有效记录 ${duration((t.sit||0)+(t.stand||0)+(t.away||0))}${data.annotations?.length?' · 含 '+data.annotations.length+' 段人工标注':''}${data.continuity?.inferred_seconds?' · 连续性补齐 '+duration(data.continuity.inferred_seconds):''}`);drawTimeline();drawHours();renderIntervals();renderNotes();el('reminder-notes').replaceChildren(...data.notes.filter(n=>n.kind==='reminder').slice(0,3).map(n=>make('li','',`${at(n.start)} · ${n.body}`)));text('updated',`上次同步 ${precise(data.as_of)} · 每 15 秒静默更新`)}
 function spark(id,rows,field,max,color){const svg=el(id);svg.replaceChildren();svg.append(svgNode('line',{x1:0,x2:240,y1:40,y2:40,stroke:'#edf0e8'}));const points=rows.map((r,i)=>Number.isFinite(r[field])?[i,r[field]]:null).filter(Boolean);if(!points.length)return;const start=rows[0].at,end=rows[rows.length-1].at,span=Math.max(900,end-start);let segments=[],run=[];rows.forEach((r,i)=>{if(!Number.isFinite(r[field])||(i&&r.at-rows[i-1].at>40)){if(run.length)segments.push(run);run=[]}if(Number.isFinite(r[field]))run.push([240-(end-r.at)/span*240,39-Math.min(max,r[field])/max*35])});if(run.length)segments.push(run);segments.forEach(p=>{svg.append(svgNode('path',{d:p.map(([x,y],i)=>(i?'L':'M')+x.toFixed(1)+','+y.toFixed(1)).join(' '),fill:'none',stroke:color,'stroke-width':1.8,'stroke-linejoin':'round'}));const [x,y]=p[p.length-1];svg.append(svgNode('circle',{cx:x,cy:y,r:2.5,fill:color}))});tooltip(svg,`最近 ${Math.min(15,Math.max(1,Math.round((end-start)/60)))} 分钟\n最低 ${Math.min(...points.map(p=>p[1])).toFixed(1)} · 最高 ${Math.max(...points.map(p=>p[1])).toFixed(1)}\n每 15 秒采样，服务重启后重新累积`)}
 function kv(container,entries,unit=''){container.replaceChildren(...entries.map(([k,v])=>{const row=make('div','kv');row.append(make('span','',k),make('b','',v+unit));return row}));if(!entries.length)container.append(make('span','muted','不可用'))}
 function drawDisk(h){const svg=el('disk-chart');svg.replaceChildren();if(!h.disk_total_gib)return;const values=[['已使用',h.disk_used_gib,'#28634c'],['可用空间',h.disk_free_gib,'#bcd890'],['文件系统保留',Math.max(0,h.disk_total_gib-h.disk_used_gib-h.disk_free_gib),'#da9560']];let offset=0;const circumference=2*Math.PI*49;values.forEach(([label,value,color])=>{const length=value/h.disk_total_gib*circumference;const circle=svgNode('circle',{cx:60,cy:60,r:49,fill:'none',stroke:color,'stroke-width':14,'stroke-dasharray':`${length} ${circumference-length}`,'stroke-dashoffset':-offset});tooltip(circle,`${label} ${value.toFixed(1)} GiB · ${(value/h.disk_total_gib*100).toFixed(1)}%`);svg.append(circle);offset+=length});text('disk-free',h.disk_free_gib.toFixed(1));text('disk-total',`总容量 ${h.disk_total_gib.toFixed(1)} GiB`);el('disk-legend').replaceChildren(...values.map(([label,value,color])=>{const d=make('div'),l=make('div','disk-label'),k=make('span','key');k.style.background=color;l.append(k,document.createTextNode(label));d.append(l,make('strong','',value.toFixed(1)+' GiB'),make('small','',(value/h.disk_total_gib*100).toFixed(1)+'%'));return d}))}
@@ -828,7 +845,7 @@ async function refresh() {
   loading=true;
   void syncFocus();
   const day=followToday?'':el('day').value;
-  const revision=activityRevision;
+  const revision=activityRevision, cameraVersion=privacyVersion;
   const unchanged=()=>revision===activityRevision && day===(followToday?'':el('day').value);
   try {
     const [activity, hw, models]=await Promise.allSettled([
@@ -836,6 +853,7 @@ async function refresh() {
     ]);
     if (unchanged() && activity.status==='fulfilled') {
       data=activity.value; renderActivity();
+      if(cameraVersion===privacyVersion && !privacyBusy) applyCamera(data.camera||{},data.as_of);
       el('open-absence').hidden=data.date>=data.today;
       void loadWeek();
       updateInbox();
@@ -848,10 +866,8 @@ async function refresh() {
       }
       text('error','暂时无法连接 Orin，图表保留上次数据。'); el('error').hidden=false;
       el('open-absence').hidden=true;
-      text('connection','连接中断'); text('current','实时状态不可用');
-      text('current-detail','等待重新连接'); text('vision-flow-status','连接中断');
-      el('show').disabled=true; el('frame').hidden=true; el('frame').removeAttribute('src'); corner=null;
-      clearLive('连接中断，实时画面已清除');
+      text('connection','连接中断');
+      if(cameraVersion===privacyVersion && !privacyBusy) invalidateCamera('连接中断，实时画面已清除');
     }
     if(hw.status==='fulfilled') {hardware=hw.value;renderHardware()}
     else text('hardware-updated','硬件数据暂不可用，保留上次样本');
@@ -1347,15 +1363,133 @@ el('voice').onclick=()=>action(async()=>{
   }
 });
 el('settings').onsubmit=e=>{e.preventDefault();action(async()=>{await request('/api/settings',{stand_minutes:+el('stand').value,sit_minutes:+el('sit').value});notify('目标与提醒设置已保存')})};
-el('show').onclick=()=>{el('frame').src='/api/calibration/frame?t='+Date.now();el('frame').hidden=false};el('region').onchange=()=>corner=null;el('frame').onclick=e=>action(async()=>{const r=el('frame').getBoundingClientRect(),xy=[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height];if(!corner){corner=xy;notify('请点击选区另一角');return}const box=[Math.min(corner[0],xy[0]),Math.min(corner[1],xy[1]),Math.max(corner[0],xy[0]),Math.max(corner[1],xy[1])];corner=null;await request('/api/region/'+el('region').value,{box});notify('选区已保存')});document.querySelectorAll('[data-point]').forEach(b=>b.onclick=()=>action(async()=>{await request('/api/calibration/'+b.dataset.point,{});notify(b.textContent+'已保存')}));
+el('show').onclick=loadCalibration;el('region').onchange=()=>corner=null;el('frame').onclick=e=>action(async()=>{const r=el('frame').getBoundingClientRect(),xy=[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height];if(!corner){corner=xy;notify('请点击选区另一角');return}const box=[Math.min(corner[0],xy[0]),Math.min(corner[1],xy[1]),Math.max(corner[0],xy[0]),Math.max(corner[1],xy[1])];corner=null;await request('/api/region/'+el('region').value,{box});notify('选区已保存')});document.querySelectorAll('[data-point]').forEach(b=>b.onclick=()=>action(async()=>{await request('/api/calibration/'+b.dataset.point,{});notify(b.textContent+'已保存')}));
 function openModel(id){if(!catalog)return;const c=catalog.components.find(c=>c.id===id);modelComponent=c;text('model-title',c.title+' · '+c.model);text('model-description',c.description+' '+c.engine+'。'+c.memory_note);el('model-options').replaceChildren(...c.options.map(o=>{const label=make('label','model-option'),input=make('input');input.type='radio';input.name='model';input.value=o.id;input.checked=o.id===c.selected;input.disabled=!o.installed||c.options.length<2;label.append(input,make('b','',o.name+(o.id===c.selected?' · 当前':'')),make('small','',`权重 ${weightLabel(o.weights_bytes)} · 预计内存 ${memoryLabel(o)}`),make('small','',o.note+(!o.installed?' · 未安装':'')));return label}));text('model-notice',id==='asr'?'应用后从下一次语音提问生效。可随时切回 small；不改变历史记录。':'本机目前只有一个已适配选项，暂不能切换其他模型。');el('apply-model').hidden=c.options.filter(o=>o.installed).length<2;text('model-result','');el('model-modal').showModal()}
 document.querySelectorAll('[data-model]').forEach(b=>b.onclick=()=>openModel(b.dataset.model));el('close-model').onclick=el('cancel-model').onclick=()=>el('model-modal').close();el('model-form').onsubmit=async e=>{e.preventDefault();const model=new FormData(e.target).get('model');if(!model)return;el('apply-model').disabled=true;try{const r=await request('/api/models/select',{component:modelComponent.id,model});text('model-result',r.message);await refresh();const updated=catalog.components.find(c=>c.id===modelComponent.id);text('model-title',updated.title+' · '+updated.model);el('model-options').querySelectorAll('.model-option').forEach(label=>{const id=label.querySelector('input').value;const option=updated.options.find(o=>o.id===id);label.querySelector('b').textContent=option.name+(id===updated.selected?' · 当前':'')});notify(r.message)}catch(e){text('model-result',e.message)}finally{el('apply-model').disabled=false}};
 document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{document.querySelectorAll('.nav a').forEach(b=>b.classList.toggle('active',a===b))});['sit','stand','away','privacy','unknown'].forEach(s=>{const label=make('span');label.append(key(s),document.createTextNode(names[s]));el('legend').append(label)});
 
+function clearCalibration(){
+  calibrationRead++; corner=null;
+  const img=el('frame'); img.hidden=true; img.removeAttribute('src');
+  if(calibrationURL){URL.revokeObjectURL(calibrationURL);calibrationURL=null}
+}
+function cameraAvailable(){
+  return privacyKnown && !privacySession && !privacyBusy && !privacyAttempt && cameraSample?.ready &&
+    !cameraSample.vision_paused && !cameraSample.privacy_active;
+}
+async function loadCalibration(){
+  if(!cameraAvailable() || document.hidden) return;
+  clearCalibration();
+  const read=calibrationRead;
+  try{
+    const response=await fetch('/api/calibration/frame',{cache:'no-store',signal:AbortSignal.timeout(5000)});
+    if(!response.ok) throw Error('校准画面暂不可用。');
+    const frame=await response.blob();
+    if(read!==calibrationRead || !cameraAvailable() || document.hidden) return;
+    calibrationURL=URL.createObjectURL(frame); el('frame').src=calibrationURL; el('frame').hidden=false;
+  }catch(error){if(read===calibrationRead) notify(error.message)}
+}
+function invalidateCamera(message){
+  privacyVersion++; privacyRead++; privacyKnown=false; cameraSample=null;
+  clearCalibration(); clearLive(message); renderPrivacy();
+}
+function renderPrivacy(){
+  const c=cameraSample||{}, active=privacySession;
+  const state=privacyKnown?(active?'手动暂停中':c.privacy_active?'隐私保护中':!c.ready?(c.stale?'摄像头没有新画面':'摄像头未就绪'):
+    c.vision_paused?'画面过暗，检测暂停':c.pose_source==='multiple_people'?'多人在位 · 个人姿态未确认':
+    '当前'+(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':'')):'实时状态待核对';
+  text('current',state);
+  text('current-detail',c.ready && !c.vision_paused && privacyKnown && !active?
+    '今天实时 · '+(c.fps||0)+' FPS · '+(c.presence_source==='short_occlusion'?'遮挡，短时延续在位':names[c.presence]||'未知'):'等待可用画面');
+  text('vision-flow-status',active && privacyKnown?'手动隐私暂停':c.vision_paused?'隐私 / 暗场暂停':cameraAvailable()?'视觉采集运行中':'等待摄像头');
+  text('privacy-state',!privacyKnown?'摄像头状态待核对。':active?(privacyAttempt?.id===active.id && !privacyAttempt.resume?'画面已屏蔽，暂停完成待确认 · 期限 ':'已暂停至 ')+new Date(active.until*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+'（北京时间）':
+    c.privacy_active || (c.ready && c.vision_paused)?'手动暂停已关闭，自动暗场保护中。':'手动暂停已关闭。');
+  el('privacy-duration').hidden=!!active || !!privacyAttempt;
+  el('privacy-minutes').disabled=privacyBusy || !privacyKnown;
+  el('privacy-change').disabled=privacyBusy;
+  text('privacy-change',privacyAttempt?(privacyAttempt.resume?'重试提前恢复':'重试暂停'):!privacyKnown?'重新读取状态':active?'提前恢复':'暂停摄像头');
+  el('show').disabled=!cameraAvailable(); el('live-toggle').disabled=!cameraAvailable() && !liveActive;
+}
+function applyPrivacy(active,now){
+  const changed=(privacySession?.id||null)!==(active?.id||null);
+  if(changed){
+    privacyVersion++; privacyRead++; cameraSample=null;
+    if(!privacyAttempt) text('privacy-feedback','');
+    liveActive=false; text('live-toggle','开启实时画面'); clearCalibration();
+    clearLive(active?'摄像头已手动暂停，实时画面已清除':'手动暂停已结束，等待新画面');
+  }
+  privacySession=active; privacyKnown=true;
+  clearTimeout(privacyTimer);
+  if(active && Number.isFinite(now)) privacyTimer=setTimeout(()=>{if(!document.hidden) void syncPrivacy()},Math.max(500,(active.until-now)*1000+100));
+}
+function applyCamera(c,now){
+  if((c.manual_privacy && !c.manual_id) || (privacySession && typeof c.manual_privacy!=='boolean')){invalidateCamera('摄像头隐私暂停，实时画面已清除');void syncPrivacy(false);return}
+  applyPrivacy(c.manual_privacy?{id:c.manual_id,until:c.manual_until}:null,now);
+  cameraSample=c; renderPrivacy();
+  if(!cameraAvailable()){
+    clearCalibration();
+    clearLive(privacySession?'摄像头已手动暂停，实时画面已清除':c.privacy_active?'隐私保护中，实时画面已清除':'画面不可用，预览已暂停');
+  }
+}
+async function syncPrivacy(refreshCamera=true){
+  if(privacyBusy) return;
+  const read=++privacyRead;
+  try{
+    const state=await request('/api/camera/privacy');
+    if(read!==privacyRead) return;
+    const previous=privacySession?.id;
+    applyPrivacy(state.active,state.server_now); renderPrivacy();
+    if(refreshCamera && (previous!==state.active?.id || !cameraSample)) void refresh();
+  }catch(error){
+    if(read===privacyRead){invalidateCamera('无法核对摄像头状态，预览已暂停');text('privacy-feedback','无法读取手动隐私状态，可重新核对。')}
+  }
+}
+function savePrivacyAttempt(value){
+  privacyAttempt=value;
+  try{
+    if(value) sessionStorage.setItem(privacyStorage,JSON.stringify(value)); else sessionStorage.removeItem(privacyStorage);
+  }catch{}
+}
+const privacyBus=typeof BroadcastChannel==='function'?new BroadcastChannel('deskside.camera-privacy'):null;
+function cameraChanged(){
+  invalidateCamera('正在核对摄像头状态，旧画面已清除');
+  if(!document.hidden) void syncPrivacy();
+}
+if(privacyBus) privacyBus.onmessage=cameraChanged;
+else if(typeof window!=='undefined') window.addEventListener('storage',e=>{if(e.key==='deskside.camera-privacy.changed') cameraChanged()});
+function broadcastCameraChange(){
+  if(privacyBus) privacyBus.postMessage('changed');
+  else try{localStorage.setItem('deskside.camera-privacy.changed',crypto.randomUUID())}catch{}
+}
+el('privacy-change').onclick=async()=>{
+  if(privacyBusy) return;
+  if(!privacyKnown && !privacyAttempt){text('privacy-feedback','');void syncPrivacy();return}
+  if(!privacyAttempt) savePrivacyAttempt(privacySession?{id:privacySession.id,resume:true}:
+    {id:crypto.randomUUID(),minutes:Number(el('privacy-minutes').value)});
+  const op=privacyAttempt;
+  privacyBusy=true; invalidateCamera('正在核对摄像头操作，预览已暂停'); text('privacy-feedback','正在等待 Orin 确认…');
+  try{
+    const state=await request('/api/camera/privacy'+(op.resume?'/'+encodeURIComponent(op.id)+'/resume':''),
+      op.resume?{}:{id:op.id,minutes:op.minutes},12000);
+    savePrivacyAttempt(null); applyPrivacy(state.active,state.server_now);
+    text('privacy-feedback',op.resume?(state.active?'当前有另一项手动暂停。':'已结束手动暂停。'):
+      state.active?.id===op.id?'Orin 已确认暂停。':'该次暂停已结束。');
+  }catch(error){
+    if(error.status>=400 && error.status<500) savePrivacyAttempt(null);
+    text('privacy-feedback',privacyAttempt?(error.status===503?error.message:'未确认操作完成，可用同一请求重试。'):error.message);
+  }finally{
+    privacyBusy=false; privacyVersion++; renderPrivacy(); broadcastCameraChange();
+    if(!privacyKnown) void syncPrivacy();
+    else void refresh();
+  }
+};
 const bones=[[0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
 function clearLive(message){liveEpoch++;const canvas=el('live-canvas');canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);canvas.hidden=true;el('live-placeholder').hidden=false;text('live-message',message);text('live-posture',liveActive?'预览暂停':'等待开启');el('live-details').replaceChildren()}
-async function loadLive(){if(!liveActive||liveBusy||document.hidden)return;liveBusy=true;const generation=liveEpoch;try{const r=await request('/api/live/frame');if(generation!==liveEpoch||!liveActive)return;const c=r.camera;if(c.vision_paused||c.privacy_active){clearLive('隐私保护中，实时画面已清除');return}const img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src='data:image/jpeg;base64,'+r.image});if(generation!==liveEpoch||!liveActive||document.hidden)return;const canvas=el('live-canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);const points=c.overlay?.keypoints||[];const valid=p=>p&&p.confidence>=.55&&p.x>=0&&p.y>=0&&p.x<canvas.width&&p.y<canvas.height;ctx.lineWidth=3;ctx.strokeStyle='#9df7bd';(c.overlay?.detections||[]).forEach(d=>{ctx.setLineDash([8,6]);const [x1,y1,x2,y2]=d.box;ctx.strokeRect(x1,y1,x2-x1,y2-y1);ctx.font='15px system-ui';ctx.fillStyle='#9df7bd';ctx.fillText('人体 '+Math.round(d.confidence*100)+'%',x1,Math.max(20,y1-7))});ctx.setLineDash([]);ctx.lineWidth=4;bones.forEach(([a,b])=>{if(valid(points[a])&&valid(points[b])){ctx.beginPath();ctx.moveTo(points[a].x,points[a].y);ctx.lineTo(points[b].x,points[b].y);ctx.stroke()}});points.forEach(p=>{if(valid(p)){ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fillStyle='#f5cf83';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle='#1e3b2c';ctx.stroke();ctx.strokeStyle='#9df7bd'}});const source=poseMethods[c.pose_source]||'暂无可靠姿态';ctx.fillStyle='rgba(20,40,32,.78)';ctx.fillRect(15,15,Math.min(640,canvas.width-30),75);ctx.fillStyle='#fff';ctx.font='22px system-ui';ctx.fillText(`姿态：${(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':'')}  ·  工位：${names[c.presence]||'未知'}`,30,46);ctx.font='15px system-ui';ctx.fillStyle='#c6d9c7';ctx.fillText(`${source}  /  ${precise(c.captured_at)}  /  有效关节 ${points.filter(valid).length}/17`,30,73);canvas.hidden=false;el('live-placeholder').hidden=true;text('live-posture',c.pose_source==='multiple_people'?'多人在位 · 个人姿态未确认':(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':''));kv(el('live-details'),[['工位',names[c.presence]||'未知'],['骨骼模型',c.vision_model?.name||c.overlay?.model||'—'],['模型耗时',Number.isFinite(c.vision_ms)?c.vision_ms.toFixed(1)+' ms':'—'],['判断来源',source],['可见关节',points.filter(valid).length+' / 17'],['检测帧率',(c.fps||0)+' FPS'],['画面时间',precise(c.captured_at)]]);img.src=''}catch(error){if(generation===liveEpoch)clearLive(error.message||'画面暂不可用')}finally{liveBusy=false}}
-el('live-toggle').onclick=()=>{liveActive=!liveActive;el('live-toggle').textContent=liveActive?'关闭实时画面':'开启实时画面';if(liveActive){clearLive('正在连接本机摄像头…');loadLive()}else clearLive('实时画面已关闭')};setInterval(loadLive,1000);document.addEventListener('visibilitychange',()=>{if(document.hidden){clearLive('页面已隐藏，预览暂停');el('frame').hidden=true;el('frame').removeAttribute('src');corner=null;}else if(liveActive)loadLive()});
+async function loadLive(){if(!liveActive||liveBusy||document.hidden||!cameraAvailable())return;liveBusy=true;const generation=liveEpoch;try{const r=await request('/api/live/frame');if(generation!==liveEpoch||!liveActive)return;const c=r.camera;if(c.manual_privacy||c.vision_paused||c.privacy_active){applyCamera(c);return}const img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src='data:image/jpeg;base64,'+r.image});if(generation!==liveEpoch||!liveActive||document.hidden)return;const canvas=el('live-canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);const points=c.overlay?.keypoints||[];const valid=p=>p&&p.confidence>=.55&&p.x>=0&&p.y>=0&&p.x<canvas.width&&p.y<canvas.height;ctx.lineWidth=3;ctx.strokeStyle='#9df7bd';(c.overlay?.detections||[]).forEach(d=>{ctx.setLineDash([8,6]);const [x1,y1,x2,y2]=d.box;ctx.strokeRect(x1,y1,x2-x1,y2-y1);ctx.font='15px system-ui';ctx.fillStyle='#9df7bd';ctx.fillText('人体 '+Math.round(d.confidence*100)+'%',x1,Math.max(20,y1-7))});ctx.setLineDash([]);ctx.lineWidth=4;bones.forEach(([a,b])=>{if(valid(points[a])&&valid(points[b])){ctx.beginPath();ctx.moveTo(points[a].x,points[a].y);ctx.lineTo(points[b].x,points[b].y);ctx.stroke()}});points.forEach(p=>{if(valid(p)){ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fillStyle='#f5cf83';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle='#1e3b2c';ctx.stroke();ctx.strokeStyle='#9df7bd'}});const source=poseMethods[c.pose_source]||'暂无可靠姿态';ctx.fillStyle='rgba(20,40,32,.78)';ctx.fillRect(15,15,Math.min(640,canvas.width-30),75);ctx.fillStyle='#fff';ctx.font='22px system-ui';ctx.fillText(`姿态：${(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':'')}  ·  工位：${names[c.presence]||'未知'}`,30,46);ctx.font='15px system-ui';ctx.fillStyle='#c6d9c7';ctx.fillText(`${source}  /  ${precise(c.captured_at)}  /  有效关节 ${points.filter(valid).length}/17`,30,73);canvas.hidden=false;el('live-placeholder').hidden=true;text('live-posture',c.pose_source==='multiple_people'?'多人在位 · 个人姿态未确认':(names[c.person]||'未知')+((c.pose_source||'').startsWith('estimate_')?'（推测）':''));kv(el('live-details'),[['工位',names[c.presence]||'未知'],['骨骼模型',c.vision_model?.name||c.overlay?.model||'—'],['模型耗时',Number.isFinite(c.vision_ms)?c.vision_ms.toFixed(1)+' ms':'—'],['判断来源',source],['可见关节',points.filter(valid).length+' / 17'],['检测帧率',(c.fps||0)+' FPS'],['画面时间',precise(c.captured_at)]]);img.src=''}catch(error){if(generation===liveEpoch){
+  clearLive(error.message||'画面暂不可用');
+  if(error.status===423){cameraSample=null;clearCalibration();renderPrivacy();void syncPrivacy(false)}
+}}finally{liveBusy=false}}
+el('live-toggle').onclick=()=>{liveActive=!liveActive;el('live-toggle').textContent=liveActive?'关闭实时画面':'开启实时画面';if(liveActive){clearLive('正在连接本机摄像头…');loadLive()}else clearLive('实时画面已关闭')};setInterval(loadLive,1000);document.addEventListener('visibilitychange',()=>{if(document.hidden) invalidateCamera('页面已隐藏，预览暂停')});
 
 el('dismiss-reminder').onclick=()=>{localStorage.setItem('deskside-reminder-ack',Math.max(0,...(data.active_reminders||[]).map(r=>r.id)));el('reminder-banner').hidden=true};
 refresh();setInterval(()=>{if(!document.hidden)refresh()},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
